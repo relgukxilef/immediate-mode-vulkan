@@ -48,7 +48,10 @@ target_link_libraries(
     gdi32 user32 kernel32 Vulkan::Vulkan glfw Vulkan::Headers glm
 )
 
-target_include_directories(raytrace PRIVATE ${Boost_INCLUDE_DIRS})
+target_include_directories(
+    raytrace PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 function(add_shader TARGET SHADER)
     find_program(GLSLC glslc)

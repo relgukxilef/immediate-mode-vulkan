@@ -1,8 +1,7 @@
 #pragma once
 
+#include "resources/vulkan_resources.h"
 #include <memory>
-
-#include "../resources/vulkan_resources.h"
 
 struct image;
 struct view;
@@ -10,7 +9,6 @@ struct ui;
 
 struct image {
     image() = default;
-    image(ui& ui, view& view, VkImage image);
 
     unique_framebuffer swapchain_framebuffer;
     unique_image_view swapchain_image_view;
@@ -23,7 +21,6 @@ struct image {
 
 struct view {
     view() = default;
-    view(ui& ui);
 
     VkResult render(ui &ui);
 
@@ -34,6 +31,7 @@ struct view {
     VkRect2D scissors;
     unique_swapchain swapchain;
 
+    std::unique_ptr<VkImage[]> swapchain_images;
     std::unique_ptr<image[]> images;
 };
 
@@ -80,4 +78,3 @@ struct ui {
     VkSurfaceFormatKHR surface_format;
     VkPhysicalDeviceMemoryProperties memory_properties;
 };
-

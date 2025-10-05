@@ -48,12 +48,12 @@ int main() {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     unique_window window{glfwCreateWindow(
-        window_width, window_height, "Refdraw", nullptr, nullptr
+        window_width, window_height, "Vulkan Experiments", nullptr, nullptr
     )};
 
     VkApplicationInfo application_info{
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-        .pApplicationName = "Refdraw",
+        .pApplicationName = "Vulkan Experiments",
         .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
         .pEngineName = "No Engine",
         .engineVersion = VK_MAKE_VERSION(1, 0, 0),

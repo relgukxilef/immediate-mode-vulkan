@@ -190,184 +190,67 @@ void create_shader(
     ));
 }
 
-image::image(ui& ui, view& view, VkImage image) {
-     {
-        VkSemaphoreCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        };
-        check(vkCreateSemaphore(
-            ui.device.get(), &create_info, nullptr,
-            out_ptr(render_finished_semaphore)
-        ));
-    }
-
-    {
-        VkFenceCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-            .flags = VK_FENCE_CREATE_SIGNALED_BIT,
-        };
-        check(vkCreateFence(
-            ui.device.get(), &create_info, nullptr, out_ptr(render_finished_fence)
-        ));
-    }
-
-    {
-        VkImageViewCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .image = image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = ui.surface_format.format,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-        };
-        check(vkCreateImageView(
-            ui.device.get(), &create_info, nullptr,
-            out_ptr(swapchain_image_view)
-        ));
-    }
-
-    {
-        auto attachments = {
-            swapchain_image_view.get(),
-        };
-        VkFramebufferCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .renderPass = ui.render_pass.get(),
-            .attachmentCount = static_cast<uint32_t>(attachments.size()),
-            .pAttachments = attachments.begin(),
-            .width = view.extent.width,
-            .height = view.extent.height,
-            .layers = 1,
-        };
-        check(vkCreateFramebuffer(
-            ui.device.get(), &create_info, nullptr,
-            out_ptr(swapchain_framebuffer)
-        ));
-    }
-
-    VkCommandBufferAllocateInfo command_buffer_info = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = ui.command_pool.get(),
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
-    };
-    check(vkAllocateCommandBuffers(
-        ui.device.get(), &command_buffer_info, &video_draw_command_buffer
-    ));
-
-    VkCommandBufferBeginInfo begin_info = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-    };
-    check(vkBeginCommandBuffer(video_draw_command_buffer, &begin_info));
-
-    auto clear_values = {
-        VkClearValue{
-            .color = {{0.0f, 0.0f, 0.0f, 1.0f}},
-        },
-    };
-
-    VkRenderPassBeginInfo render_pass_begin_info = {
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-        .renderPass = ui.render_pass.get(),
-        .framebuffer = swapchain_framebuffer.get(),
-        .renderArea = {
-            .offset = {0, 0}, .extent = view.extent,
-        },
-        .clearValueCount = static_cast<uint32_t>(clear_values.size()),
-        .pClearValues = clear_values.begin(),
-    };
-
-    vkCmdBeginRenderPass(
-        video_draw_command_buffer, &render_pass_begin_info,
-        VK_SUBPASS_CONTENTS_INLINE
-    );
-
-    vkCmdBindPipeline(
-        video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        ui.video_pipeline.get()
-    );
-
-    vkCmdBindDescriptorSets(
-        video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        ui.video_pipeline_layout.get(), 0, 1, &ui.descriptor_set, 0, nullptr
-    );
-
-    vkCmdDraw(video_draw_command_buffer, 6, 1, 0, 0);
-
-    vkCmdEndRenderPass(video_draw_command_buffer);
-
-    check(vkEndCommandBuffer(video_draw_command_buffer));
-}
-
-view::view(ui& ui) {
-    check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-        ui.physical_device, ui.surface, &capabilities
-    ));
-
-    unsigned width = capabilities.currentExtent.width;
-    unsigned height = capabilities.currentExtent.height;
-
-    extent = {
-        std::max(
-            std::min<uint32_t>(width, capabilities.maxImageExtent.width),
-            capabilities.minImageExtent.width
-        ),
-        std::max(
-            std::min<uint32_t>(height, capabilities.maxImageExtent.height),
-            capabilities.minImageExtent.height
-        )
-    };
-
-    {
-        uint32_t queue_family_indices[]{
-            ui.graphics_queue_family, ui.present_queue_family
-        };
-        VkSwapchainCreateInfoKHR create_info{
-            .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-            .surface = ui.surface,
-            .minImageCount = capabilities.minImageCount,
-            .imageFormat = ui.surface_format.format,
-            .imageColorSpace = ui.surface_format.colorSpace,
-            .imageExtent = extent,
-            .imageArrayLayers = 1,
-            .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-            .imageSharingMode = VK_SHARING_MODE_CONCURRENT,
-            .queueFamilyIndexCount = std::size(queue_family_indices),
-            .pQueueFamilyIndices = queue_family_indices,
-            .preTransform = capabilities.currentTransform,
-            .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-            // fifo has the widest support
-            .presentMode = VK_PRESENT_MODE_FIFO_KHR,
-            .clipped = VK_TRUE,
-            .oldSwapchain = VK_NULL_HANDLE,
-        };
-        check(vkCreateSwapchainKHR(
-            ui.device.get(), &create_info, nullptr, out_ptr(swapchain)
-        ));
-    }
-
-    check(vkGetSwapchainImagesKHR(
-        ui.device.get(), swapchain.get(), &image_count, nullptr
-    ));
-
-    auto swapchain_images = std::make_unique<VkImage[]>(image_count);
-    images = std::make_unique<image[]>(image_count);
-
-    check(vkGetSwapchainImagesKHR(
-        ui.device.get(), swapchain.get(), &image_count, swapchain_images.get()
-    ));
-
-    for (auto image = 0u; image < image_count; image++) {
-        images[image] = ::image(ui, *this, swapchain_images[image]);
-    }
-}
-
 VkResult view::render(ui& ui) {
+    if (!swapchain) {
+        check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+            ui.physical_device, ui.surface, &capabilities
+        ));
+
+        unsigned width = capabilities.currentExtent.width;
+        unsigned height = capabilities.currentExtent.height;
+
+        extent = {
+            std::max(
+                std::min<uint32_t>(width, capabilities.maxImageExtent.width),
+                capabilities.minImageExtent.width
+            ),
+            std::max(
+                std::min<uint32_t>(height, capabilities.maxImageExtent.height),
+                capabilities.minImageExtent.height
+            )
+        };
+
+        {
+            uint32_t queue_family_indices[]{
+                ui.graphics_queue_family, ui.present_queue_family
+            };
+            VkSwapchainCreateInfoKHR create_info{
+                .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+                .surface = ui.surface,
+                .minImageCount = capabilities.minImageCount,
+                .imageFormat = ui.surface_format.format,
+                .imageColorSpace = ui.surface_format.colorSpace,
+                .imageExtent = extent,
+                .imageArrayLayers = 1,
+                .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                .imageSharingMode = VK_SHARING_MODE_CONCURRENT,
+                .queueFamilyIndexCount = std::size(queue_family_indices),
+                .pQueueFamilyIndices = queue_family_indices,
+                .preTransform = capabilities.currentTransform,
+                .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                // fifo has the widest support
+                .presentMode = VK_PRESENT_MODE_FIFO_KHR,
+                .clipped = VK_TRUE,
+                .oldSwapchain = VK_NULL_HANDLE,
+            };
+            check(vkCreateSwapchainKHR(
+                ui.device.get(), &create_info, nullptr, out_ptr(swapchain)
+            ));
+        }
+
+        check(vkGetSwapchainImagesKHR(
+            ui.device.get(), swapchain.get(), &image_count, nullptr
+        ));
+
+        swapchain_images = std::make_unique<VkImage[]>(image_count);
+        images = std::make_unique<image[]>(image_count);
+
+        check(vkGetSwapchainImagesKHR(
+            ui.device.get(), swapchain.get(), &image_count, 
+            swapchain_images.get()
+        ));
+    }
+
     uint32_t image_index;
     VkResult result = vkAcquireNextImageKHR(
         ui.device.get(), swapchain.get(), ~0ul,
@@ -379,7 +262,128 @@ VkResult view::render(ui& ui) {
     }
     check(result);
 
-    auto fence = images[image_index].render_finished_fence.get();
+    ::image& image = images[image_index];
+    VkImage swapchain_image = swapchain_images[image_index];
+
+    if (!image.swapchain_image_view) {
+        {
+            VkSemaphoreCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            };
+            check(vkCreateSemaphore(
+                ui.device.get(), &create_info, nullptr,
+                out_ptr(image.render_finished_semaphore)
+            ));
+        }
+
+        {
+            VkFenceCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+            };
+            check(vkCreateFence(
+                ui.device.get(), &create_info, nullptr, 
+                out_ptr(image.render_finished_fence)
+            ));
+        }
+
+        {
+            VkImageViewCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = swapchain_image,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format = ui.surface_format.format,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+            check(vkCreateImageView(
+                ui.device.get(), &create_info, nullptr,
+                out_ptr(image.swapchain_image_view)
+            ));
+        }
+
+        {
+            auto attachments = {
+                image.swapchain_image_view.get(),
+            };
+            VkFramebufferCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .renderPass = ui.render_pass.get(),
+                .attachmentCount = static_cast<uint32_t>(attachments.size()),
+                .pAttachments = attachments.begin(),
+                .width = extent.width,
+                .height = extent.height,
+                .layers = 1,
+            };
+            check(vkCreateFramebuffer(
+                ui.device.get(), &create_info, nullptr,
+                out_ptr(image.swapchain_framebuffer)
+            ));
+        }
+
+        VkCommandBufferAllocateInfo command_buffer_info = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = ui.command_pool.get(),
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        check(vkAllocateCommandBuffers(
+            ui.device.get(), &command_buffer_info, 
+            &image.video_draw_command_buffer
+        ));
+
+        VkCommandBufferBeginInfo begin_info = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        };
+        check(vkBeginCommandBuffer(
+            image.video_draw_command_buffer, &begin_info
+        ));
+
+        auto clear_values = {
+            VkClearValue{
+                .color = {{0.0f, 0.0f, 0.0f, 1.0f}},
+            },
+        };
+
+        VkRenderPassBeginInfo render_pass_begin_info = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = ui.render_pass.get(),
+            .framebuffer = image.swapchain_framebuffer.get(),
+            .renderArea = {
+                .offset = {0, 0}, .extent = extent,
+            },
+            .clearValueCount = static_cast<uint32_t>(clear_values.size()),
+            .pClearValues = clear_values.begin(),
+        };
+
+        vkCmdBeginRenderPass(
+            image.video_draw_command_buffer, &render_pass_begin_info,
+            VK_SUBPASS_CONTENTS_INLINE
+        );
+
+        vkCmdBindPipeline(
+            image.video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            ui.video_pipeline.get()
+        );
+
+        vkCmdBindDescriptorSets(
+            image.video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            ui.video_pipeline_layout.get(), 0, 1, &ui.descriptor_set, 0, nullptr
+        );
+
+        vkCmdDraw(image.video_draw_command_buffer, 6, 1, 0, 0);
+
+        vkCmdEndRenderPass(image.video_draw_command_buffer);
+
+        check(vkEndCommandBuffer(image.video_draw_command_buffer));
+    }
+
+    auto fence = image.render_finished_fence.get();
 
     check(vkWaitForFences(
         ui.device.get(), 1, &fence,
@@ -391,7 +395,7 @@ VkResult view::render(ui& ui) {
 
     // TODO: maybe move this to image::render
     auto wait_semaphore = ui.swapchain_image_ready_semaphore.get();
-    auto signal_semaphore = images[image_index].render_finished_semaphore.get();
+    auto signal_semaphore = image.render_finished_semaphore.get();
     VkPipelineStageFlags wait_stage =
         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     VkSubmitInfo submitInfo = {
@@ -400,13 +404,13 @@ VkResult view::render(ui& ui) {
         .pWaitSemaphores = &wait_semaphore,
         .pWaitDstStageMask = &wait_stage,
         .commandBufferCount = 1,
-        .pCommandBuffers = &images[image_index].video_draw_command_buffer,
+        .pCommandBuffers = &image.video_draw_command_buffer,
         .signalSemaphoreCount = 1,
         .pSignalSemaphores = &signal_semaphore,
     };
     check(vkQueueSubmit(
         ui.graphics_queue, 1, &submitInfo,
-        images[image_index].render_finished_fence.get()
+        image.render_finished_fence.get()
     ));
 
     auto swapchains = swapchain.get();
@@ -812,15 +816,12 @@ ui::ui(
             out_ptr(swapchain_image_ready_semaphore)
         ));
     }
-
-    view = ::view(*this);
 }
 
 void ui::render() {
     VkResult result = view.render(*this);
     if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR) {
         view = {}; // delete first
-        view = ::view(*this);
 
         view.render(*this);
     }
