@@ -27,8 +27,6 @@ struct view {
     unsigned image_count;
     VkSurfaceCapabilitiesKHR capabilities;
     VkExtent2D extent;
-    VkViewport viewport;
-    VkRect2D scissors;
     unique_swapchain swapchain;
 
     std::unique_ptr<VkImage[]> swapchain_images;

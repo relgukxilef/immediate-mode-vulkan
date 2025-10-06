@@ -325,7 +325,20 @@ VkResult view::render(ui& ui) {
                 out_ptr(image.swapchain_framebuffer)
             ));
         }
+    }
 
+    auto fence = image.render_finished_fence.get();
+
+    check(vkWaitForFences(
+        ui.device.get(), 1, &fence,
+        VK_TRUE, ~0ul
+    ));
+    check(vkResetFences(
+        ui.device.get(), 1, &fence
+    ));
+
+    bool recording = !image.video_draw_command_buffer;
+    if (recording) {
         VkCommandBufferAllocateInfo command_buffer_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .commandPool = ui.command_pool.get(),
@@ -343,7 +356,7 @@ VkResult view::render(ui& ui) {
         check(vkBeginCommandBuffer(
             image.video_draw_command_buffer, &begin_info
         ));
-
+        
         auto clear_values = {
             VkClearValue{
                 .color = {{0.0f, 0.0f, 0.0f, 1.0f}},
@@ -365,7 +378,211 @@ VkResult view::render(ui& ui) {
             image.video_draw_command_buffer, &render_pass_begin_info,
             VK_SUBPASS_CONTENTS_INLINE
         );
+    }
 
+    if (!ui.video_pipeline) {
+        {
+            auto descriptor_set_layout_binding = {
+                VkDescriptorSetLayoutBinding{
+                    .binding = 0,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1,
+                    .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                }, {
+                    .binding = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1,
+                    .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                }, {
+                    .binding = 2,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1,
+                    .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                },
+            };
+            VkDescriptorSetLayoutCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .bindingCount =
+                    static_cast<uint32_t>(descriptor_set_layout_binding.size()),
+                .pBindings = descriptor_set_layout_binding.begin(),
+            };
+            check(vkCreateDescriptorSetLayout(
+                ui.device.get(), &create_info,
+                nullptr, out_ptr(ui.descriptor_set_layout)
+            ));
+        }
+
+        {
+            VkDescriptorPoolSize pool_size = {
+                .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+            };
+            VkDescriptorPoolCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                .maxSets = 1,
+                .poolSizeCount = 1,
+                .pPoolSizes = &pool_size,
+            };
+            check(vkCreateDescriptorPool(
+                ui.device.get(), &create_info, nullptr, 
+                out_ptr(ui.descriptor_pool))
+            );
+        }
+
+        {
+            auto layout = ui.descriptor_set_layout.get();
+            VkDescriptorSetAllocateInfo descriptor_set_allocate_info = {
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .descriptorPool = ui.descriptor_pool.get(),
+                .descriptorSetCount = 1,
+                .pSetLayouts = &layout,
+            };
+            check(vkAllocateDescriptorSets(
+                ui.device.get(), &descriptor_set_allocate_info, &ui.descriptor_set
+            ));
+        }
+
+        {
+            VkSamplerCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                .magFilter = VK_FILTER_LINEAR,
+                .minFilter = VK_FILTER_LINEAR,
+                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .anisotropyEnable = VK_FALSE,
+            };
+            check(vkCreateSampler(
+                ui.device.get(), &create_info, nullptr, 
+                out_ptr(ui.tiles_sampler)
+            ));
+        }
+
+        {
+            auto descriptor_buffer_info = {
+                VkDescriptorImageInfo{
+                    .sampler = ui.tiles_sampler.get(),
+                    .imageView = ui.tiles.image_view.get(),
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                },
+            };
+            VkWriteDescriptorSet write_descriptor_set = {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = ui.descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount =
+                    static_cast<uint32_t>(descriptor_buffer_info.size()),
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = descriptor_buffer_info.begin(),
+            };
+            vkUpdateDescriptorSets(
+                ui.device.get(), 1, &write_descriptor_set, 0, nullptr
+            );
+        }
+
+        {
+            auto layout = ui.descriptor_set_layout.get();
+            VkPipelineLayoutCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                .setLayoutCount = 1,
+                .pSetLayouts = &layout,
+            };
+            check(vkCreatePipelineLayout(
+                ui.device.get(), &create_info, nullptr, 
+                out_ptr(ui.video_pipeline_layout)
+            ));
+        }
+
+        // TODO: use VkPipelineCache
+        unique_shader_module video_vertex, video_fragment;
+        create_shader(
+            ui.device, "ui/video_vertex.glsl.spv", video_vertex
+        );
+        create_shader(
+            ui.device, "ui/video_fragment.glsl.spv", video_fragment
+        );
+        
+        auto shader_stages = {
+            VkPipelineShaderStageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                .module = video_vertex.get(),
+                .pName = "main",
+            }, VkPipelineShaderStageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = video_fragment.get(),
+                .pName = "main",
+            },
+        };
+        VkPipelineVertexInputStateCreateInfo pipeline_vertex_input_state = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        };
+        VkPipelineInputAssemblyStateCreateInfo pipeline_input_assembly_state = {
+            .sType =
+                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+            .primitiveRestartEnable = VK_FALSE,
+        };
+        VkViewport viewport = {
+            .x = 0.0f, .y = 0.0f,
+            .width = 1280.0f, .height = 720.0f,
+            .minDepth = 0.0f, .maxDepth = 1.0f,
+        };
+        VkRect2D scissor = {.offset = {0, 0}, .extent = {1280, 720},};
+        VkPipelineViewportStateCreateInfo pipeline_viewport_state = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .pViewports = &viewport,
+            .scissorCount = 1,
+            .pScissors = &scissor,
+        };
+        VkPipelineRasterizationStateCreateInfo pipeline_rasterization_state = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            .lineWidth = 1.0f, // required, even when not doing line rendering
+        };
+        VkPipelineMultisampleStateCreateInfo pipeline_multisample_state = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        };
+        auto pipeline_color_blend_attachment_states = {
+            VkPipelineColorBlendAttachmentState{
+                .colorWriteMask =
+                    VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+            },
+        };
+        VkPipelineColorBlendStateCreateInfo pipeline_color_blend_state = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .attachmentCount = static_cast<uint32_t>(
+                pipeline_color_blend_attachment_states.size()
+            ),
+            .pAttachments = pipeline_color_blend_attachment_states.begin(),
+            .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
+        };
+        VkGraphicsPipelineCreateInfo create_info = {
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .stageCount = static_cast<uint32_t>(shader_stages.size()),
+            .pStages = shader_stages.begin(),
+            .pVertexInputState = &pipeline_vertex_input_state,
+            .pInputAssemblyState = &pipeline_input_assembly_state,
+            .pViewportState = &pipeline_viewport_state,
+            .pRasterizationState = &pipeline_rasterization_state,
+            .pMultisampleState = &pipeline_multisample_state,
+            .pColorBlendState = &pipeline_color_blend_state,
+            .layout = ui.video_pipeline_layout.get(),
+            .renderPass = ui.render_pass.get(),
+        };
+        check(vkCreateGraphicsPipelines(
+            ui.device.get(), nullptr, 1, &create_info, nullptr,
+            out_ptr(ui.video_pipeline)
+        ));
+    }
+    
+    if (recording) {
         vkCmdBindPipeline(
             image.video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             ui.video_pipeline.get()
@@ -377,23 +594,14 @@ VkResult view::render(ui& ui) {
         );
 
         vkCmdDraw(image.video_draw_command_buffer, 6, 1, 0, 0);
+    }
 
+    if (recording) {
         vkCmdEndRenderPass(image.video_draw_command_buffer);
 
         check(vkEndCommandBuffer(image.video_draw_command_buffer));
     }
 
-    auto fence = image.render_finished_fence.get();
-
-    check(vkWaitForFences(
-        ui.device.get(), 1, &fence,
-        VK_TRUE, ~0ul
-    ));
-    check(vkResetFences(
-        ui.device.get(), 1, &fence
-    ));
-
-    // TODO: maybe move this to image::render
     auto wait_semaphore = ui.swapchain_image_ready_semaphore.get();
     auto signal_semaphore = image.render_finished_semaphore.get();
     VkPipelineStageFlags wait_stage =
@@ -501,7 +709,7 @@ ui::ui(
     }
     current_device = device.get();
 
-    // retreive queues
+    // retrieve queues
     vkGetDeviceQueue(device.get(), graphics_queue_family, 0, &graphics_queue);
     vkGetDeviceQueue(device.get(), present_queue_family, 0, &present_queue);
 
@@ -551,130 +759,11 @@ ui::ui(
         ));
     }
 
-    unique_shader_module video_vertex, video_fragment;
-    create_shader(
-        device, "ui/video_vertex.glsl.spv", video_vertex
-    );
-    create_shader(
-        device, "ui/video_fragment.glsl.spv", video_fragment
-    );
-
     vkGetPhysicalDeviceMemoryProperties(
         physical_device, &memory_properties
     );
 
     tiles = dynamic_image(*this, 2048);
-
-    {
-        auto descriptor_set_layout_binding = {
-            VkDescriptorSetLayoutBinding{
-                .binding = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            }, {
-                .binding = 1,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            }, {
-                .binding = 2,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            },
-        };
-        VkDescriptorSetLayoutCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount =
-                static_cast<uint32_t>(descriptor_set_layout_binding.size()),
-            .pBindings = descriptor_set_layout_binding.begin(),
-        };
-        check(vkCreateDescriptorSetLayout(
-            device.get(), &create_info,
-            nullptr, out_ptr(descriptor_set_layout)
-        ));
-    }
-
-    {
-        VkDescriptorPoolSize pool_size = {
-            .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1,
-        };
-        VkDescriptorPoolCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .maxSets = 1,
-            .poolSizeCount = 1,
-            .pPoolSizes = &pool_size,
-        };
-        check(vkCreateDescriptorPool(
-            device.get(), &create_info, nullptr, out_ptr(descriptor_pool))
-        );
-    }
-
-    {
-        auto layout = descriptor_set_layout.get();
-        VkDescriptorSetAllocateInfo descriptor_set_allocate_info = {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .descriptorPool = descriptor_pool.get(),
-            .descriptorSetCount = 1,
-            .pSetLayouts = &layout,
-        };
-        check(vkAllocateDescriptorSets(
-            device.get(), &descriptor_set_allocate_info, &descriptor_set
-        ));
-    }
-
-    {
-        VkSamplerCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-            .magFilter = VK_FILTER_LINEAR,
-            .minFilter = VK_FILTER_LINEAR,
-            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .anisotropyEnable = VK_FALSE,
-        };
-        check(vkCreateSampler(
-            device.get(), &create_info, nullptr, out_ptr(tiles_sampler)
-        ));
-    }
-
-    {
-        auto descriptor_buffer_info = {
-            VkDescriptorImageInfo{
-                .sampler = tiles_sampler.get(),
-                .imageView = tiles.image_view.get(),
-                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-            },
-        };
-        VkWriteDescriptorSet write_descriptor_set = {
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = descriptor_set,
-            .dstBinding = 0,
-            .dstArrayElement = 0,
-            .descriptorCount =
-                static_cast<uint32_t>(descriptor_buffer_info.size()),
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = descriptor_buffer_info.begin(),
-        };
-        vkUpdateDescriptorSets(
-            device.get(), 1, &write_descriptor_set, 0, nullptr
-        );
-    }
-
-    {
-        auto layout = descriptor_set_layout.get();
-        VkPipelineLayoutCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = &layout,
-        };
-        check(vkCreatePipelineLayout(
-            device.get(), &create_info, nullptr, out_ptr(video_pipeline_layout)
-        ));
-    }
 
     {
         auto attachments = {
@@ -725,85 +814,6 @@ ui::ui(
         };
         check(vkCreateRenderPass(
             device.get(), &create_info, nullptr, out_ptr(render_pass)
-        ));
-    }
-
-    {
-        auto shader_stages = {
-            VkPipelineShaderStageCreateInfo{
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                .module = video_vertex.get(),
-                .pName = "main",
-            }, VkPipelineShaderStageCreateInfo{
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                .module = video_fragment.get(),
-                .pName = "main",
-            },
-        };
-        VkPipelineVertexInputStateCreateInfo pipeline_vertex_input_state = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        };
-        VkPipelineInputAssemblyStateCreateInfo pipeline_input_assembly_state = {
-            .sType =
-                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-            .primitiveRestartEnable = VK_FALSE,
-        };
-        VkViewport viewport = {
-            .x = 0.0f, .y = 0.0f,
-            .width = 1280.0f, .height = 720.0f,
-            .minDepth = 0.0f, .maxDepth = 1.0f,
-        };
-        VkRect2D scissor = {.offset = {0, 0}, .extent = {1280, 720},};
-        VkPipelineViewportStateCreateInfo pipeline_viewport_state = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-            .viewportCount = 1,
-            .pViewports = &viewport,
-            .scissorCount = 1,
-            .pScissors = &scissor,
-        };
-        VkPipelineRasterizationStateCreateInfo pipeline_rasterization_state = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-            .polygonMode = VK_POLYGON_MODE_FILL,
-            .lineWidth = 1.0f, // required, even when not doing line rendering
-        };
-        VkPipelineMultisampleStateCreateInfo pipeline_multisample_state = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-        };
-        auto pipeline_color_blend_attachment_states = {
-            VkPipelineColorBlendAttachmentState{
-                .colorWriteMask =
-                    VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-            },
-        };
-        VkPipelineColorBlendStateCreateInfo pipeline_color_blend_state = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-            .attachmentCount = static_cast<uint32_t>(
-                pipeline_color_blend_attachment_states.size()
-            ),
-            .pAttachments = pipeline_color_blend_attachment_states.begin(),
-            .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
-        };
-        VkGraphicsPipelineCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .stageCount = static_cast<uint32_t>(shader_stages.size()),
-            .pStages = shader_stages.begin(),
-            .pVertexInputState = &pipeline_vertex_input_state,
-            .pInputAssemblyState = &pipeline_input_assembly_state,
-            .pViewportState = &pipeline_viewport_state,
-            .pRasterizationState = &pipeline_rasterization_state,
-            .pMultisampleState = &pipeline_multisample_state,
-            .pColorBlendState = &pipeline_color_blend_state,
-            .layout = video_pipeline_layout.get(),
-            .renderPass = render_pass.get(),
-        };
-        check(vkCreateGraphicsPipelines(
-            device.get(), nullptr, 1, &create_info, nullptr,
-            out_ptr(video_pipeline)
         ));
     }
 
