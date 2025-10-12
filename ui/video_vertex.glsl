@@ -1,6 +1,10 @@
 #version 450
 #pragma shader_stage(vertex)
 
+layout (std140, binding = 1) uniform parameters {
+    float time;
+};
+
 layout(location = 0) out vec2 vertex_source;
 layout(location = 1) out flat float line;
 
@@ -32,9 +36,14 @@ vec2 inset(vec2 a, vec2 b) {
 }
 
 void main() {
+    float sinTime = sin(time);
+    float cosTime = cos(time);
+    mat2 matrix = {{sinTime, cosTime}, {-cosTime, sinTime}};
+
     vec2 position = positions[gl_VertexIndex].xy * 0.1;
     vec4 tangent = tangents[gl_VertexIndex];
     position += inset(tangent.xy, tangent.zw) * 0.01;
+    position = matrix * position;
     gl_Position = vec4(
         position,
         0.0, 1.0

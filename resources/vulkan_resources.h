@@ -37,7 +37,7 @@ struct vulkan_fence_deleter {
         vkDestroyFence(current_device, fence, nullptr);
         if (std::uncaught_exceptions())
             // Destructor was called during stack unwinding, throwing a new 
-            // expcetion would terminate the application.
+            // exception would terminate the application.
             return;
         check(result);
     }
@@ -54,7 +54,9 @@ struct vulkan_handle_deleter<T, Deleter> {
     }
 };
 
-template<typename T, void(*Deleter)(VkInstance, T, const VkAllocationCallbacks*)>
+template<
+    typename T, void(*Deleter)(VkInstance, T, const VkAllocationCallbacks*)
+>
 struct vulkan_handle_deleter<T, Deleter> {
     typedef T pointer;
     void operator()(T object) {
@@ -93,3 +95,4 @@ using unique_pipeline_layout =
 using unique_pipeline = unique_vulkan_handle<VkPipeline, vkDestroyPipeline>;
 using unique_shader_module = 
     unique_vulkan_handle<VkShaderModule, vkDestroyShaderModule>;
+using unique_buffer = unique_vulkan_handle<VkBuffer, vkDestroyBuffer>;

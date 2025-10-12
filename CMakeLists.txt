@@ -33,6 +33,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(VulkanHeaders)
 
+FetchContent_Declare(
+    VulkanMemoryAllocator
+    GIT_REPOSITORY 
+        https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+    GIT_TAG v3.3.0
+)
+FetchContent_MakeAvailable(VulkanMemoryAllocator)
+
 find_package(Vulkan 1.1)
 
 add_executable(
@@ -40,12 +48,15 @@ add_executable(
     main.cpp
     resources/vulkan_resources.cpp
     resources/vulkan_resources.h
+    resources/vulkan_memory_allocator_resource.cpp
+    resources/vulkan_memory_allocator_resource.h
     ui/ui.cpp ui/ui.h
 )
 
 target_link_libraries(
     raytrace
     gdi32 user32 kernel32 Vulkan::Vulkan glfw Vulkan::Headers glm
+    VulkanMemoryAllocator
 )
 
 target_include_directories(

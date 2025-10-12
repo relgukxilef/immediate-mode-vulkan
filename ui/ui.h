@@ -1,6 +1,7 @@
 #pragma once
 
 #include "resources/vulkan_resources.h"
+#include "resources/vulkan_memory_allocator_resource.h"
 #include <memory>
 
 struct image;
@@ -16,6 +17,8 @@ struct image {
     unique_semaphore render_finished_semaphore;
     unique_fence render_finished_fence;
 
+    // TODO: descriptor sets usually aren't resolution-dependent, could be in ui
+    VkDescriptorSet descriptor_set;
     VkCommandBuffer video_draw_command_buffer;
 };
 
@@ -28,6 +31,7 @@ struct view {
     VkSurfaceCapabilitiesKHR capabilities;
     VkExtent2D extent;
     unique_swapchain swapchain;
+    unique_descriptor_pool descriptor_pool; // TODO: could be in ui
 
     std::unique_ptr<VkImage[]> swapchain_images;
     std::unique_ptr<image[]> images;
@@ -45,7 +49,10 @@ struct dynamic_image {
 
 struct ui {
     ui() = default;
-    ui(VkPhysicalDevice physical_device, VkSurfaceKHR surface);
+    ui(
+        VkInstance instance, VkPhysicalDevice physical_device, 
+        VkSurfaceKHR surface
+    );
 
     void render();
 
@@ -56,17 +63,19 @@ struct ui {
     VkQueue graphics_queue, present_queue;
     unique_command_pool command_pool;
 
+    unique_allocator allocator;
+
     dynamic_image tiles;
     unique_sampler tiles_sampler;
 
     unique_descriptor_set_layout descriptor_set_layout;
-    unique_descriptor_pool descriptor_pool;
-    VkDescriptorSet descriptor_set;
 
     unique_render_pass render_pass;
 
     unique_pipeline_layout video_pipeline_layout;
     unique_pipeline video_pipeline;
+    unique_buffer uniform_buffer;
+    unique_allocation uniform_allocation;
 
     unique_semaphore swapchain_image_ready_semaphore;
 
@@ -75,4 +84,6 @@ struct ui {
     uint32_t graphics_queue_family = ~0u, present_queue_family = ~0u;
     VkSurfaceFormatKHR surface_format;
     VkPhysicalDeviceMemoryProperties memory_properties;
+
+    float time = 0;
 };

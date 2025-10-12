@@ -4,8 +4,7 @@
 #include <memory>
 #include <algorithm>
 
-using std::out_ptr;
-using std::fill;
+using namespace std;
 
 struct file_deleter {
     void operator()(FILE*f) const;
@@ -18,7 +17,7 @@ std::vector<uint8_t> read_file(const char* name) {
     if (!file.get())
         throw std::exception();
     fseek(file.get(), 0, SEEK_END);
-    auto size = ftell(file.get());
+    auto size = size_t(ftell(file.get()));
     std::vector<uint8_t> content(size);
     fseek(file.get(), 0, SEEK_SET);
     fread(content.data(), sizeof(uint8_t), size, file.get());
@@ -217,7 +216,10 @@ VkResult view::render(ui& ui) {
             VkSwapchainCreateInfoKHR create_info{
                 .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
                 .surface = ui.surface,
-                .minImageCount = capabilities.minImageCount,
+                .minImageCount = max(
+                    min(3u, capabilities.maxImageCount), 
+                    capabilities.minImageCount
+                ),
                 .imageFormat = ui.surface_format.format,
                 .imageColorSpace = ui.surface_format.colorSpace,
                 .imageExtent = extent,
@@ -380,6 +382,8 @@ VkResult view::render(ui& ui) {
         );
     }
 
+    VkDeviceSize uniform_size = 128;
+
     if (!ui.video_pipeline) {
         {
             auto descriptor_set_layout_binding = {
@@ -390,14 +394,9 @@ VkResult view::render(ui& ui) {
                     .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
                 }, {
                     .binding = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .descriptorCount = 1,
-                    .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-                }, {
-                    .binding = 2,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .descriptorCount = 1,
-                    .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
                 },
             };
             VkDescriptorSetLayoutCreateInfo create_info = {
@@ -413,36 +412,6 @@ VkResult view::render(ui& ui) {
         }
 
         {
-            VkDescriptorPoolSize pool_size = {
-                .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-            };
-            VkDescriptorPoolCreateInfo create_info = {
-                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                .maxSets = 1,
-                .poolSizeCount = 1,
-                .pPoolSizes = &pool_size,
-            };
-            check(vkCreateDescriptorPool(
-                ui.device.get(), &create_info, nullptr, 
-                out_ptr(ui.descriptor_pool))
-            );
-        }
-
-        {
-            auto layout = ui.descriptor_set_layout.get();
-            VkDescriptorSetAllocateInfo descriptor_set_allocate_info = {
-                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                .descriptorPool = ui.descriptor_pool.get(),
-                .descriptorSetCount = 1,
-                .pSetLayouts = &layout,
-            };
-            check(vkAllocateDescriptorSets(
-                ui.device.get(), &descriptor_set_allocate_info, &ui.descriptor_set
-            ));
-        }
-
-        {
             VkSamplerCreateInfo create_info = {
                 .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                 .magFilter = VK_FILTER_LINEAR,
@@ -452,6 +421,8 @@ VkResult view::render(ui& ui) {
                 .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
                 .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
                 .anisotropyEnable = VK_FALSE,
+                .minLod = 0.0,
+                .maxLod = VK_LOD_CLAMP_NONE,
             };
             check(vkCreateSampler(
                 ui.device.get(), &create_info, nullptr, 
@@ -460,26 +431,21 @@ VkResult view::render(ui& ui) {
         }
 
         {
-            auto descriptor_buffer_info = {
-                VkDescriptorImageInfo{
-                    .sampler = ui.tiles_sampler.get(),
-                    .imageView = ui.tiles.image_view.get(),
-                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-                },
+            VkBufferCreateInfo create_info {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .size = image_count * uniform_size,
+                .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             };
-            VkWriteDescriptorSet write_descriptor_set = {
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = ui.descriptor_set,
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount =
-                    static_cast<uint32_t>(descriptor_buffer_info.size()),
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = descriptor_buffer_info.begin(),
+            VmaAllocationCreateInfo allocation_create_info {
+                .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .usage = VMA_MEMORY_USAGE_AUTO,
             };
-            vkUpdateDescriptorSets(
-                ui.device.get(), 1, &write_descriptor_set, 0, nullptr
-            );
+            check(vmaCreateBuffer(
+                ui.allocator.get(), &create_info, &allocation_create_info,
+                out_ptr(ui.uniform_buffer), out_ptr(ui.uniform_allocation),
+                nullptr
+            ));
         }
 
         {
@@ -581,8 +547,79 @@ VkResult view::render(ui& ui) {
             out_ptr(ui.video_pipeline)
         ));
     }
-    
+
+    if (!descriptor_pool) {
+        VkDescriptorPoolSize pool_size[] = {
+            {
+                .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+            }, {
+                .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+            }, 
+        };
+        VkDescriptorPoolCreateInfo create_info = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = image_count,
+            .poolSizeCount = std::size(pool_size),
+            .pPoolSizes = pool_size,
+        };
+        check(vkCreateDescriptorPool(
+            ui.device.get(), &create_info, nullptr, 
+            out_ptr(descriptor_pool))
+        );
+    }
+
     if (recording) {
+        auto layout = ui.descriptor_set_layout.get();
+        VkDescriptorSetAllocateInfo descriptor_set_allocate_info = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = descriptor_pool.get(),
+            .descriptorSetCount = 1,
+            .pSetLayouts = &layout,
+        };
+        check(vkAllocateDescriptorSets(
+            ui.device.get(), &descriptor_set_allocate_info, 
+            &image.descriptor_set
+        ));
+        VkDescriptorImageInfo descriptor_image_info[] = {
+            {
+                .sampler = ui.tiles_sampler.get(),
+                .imageView = ui.tiles.image_view.get(),
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            },
+        };
+        VkDescriptorBufferInfo descriptor_buffer_info[] = {
+            {
+                .buffer = ui.uniform_buffer.get(),
+                .offset = image_index * uniform_size,
+                .range = uniform_size,
+            }
+        };
+        VkWriteDescriptorSet write_descriptor_set[] = {
+            {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = image.descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = uint32_t(size(descriptor_image_info)),
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = descriptor_image_info,
+            }, {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = image.descriptor_set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = uint32_t(size(descriptor_buffer_info)),
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .pBufferInfo = descriptor_buffer_info,
+            }
+        };
+        vkUpdateDescriptorSets(
+            ui.device.get(), 
+            size(write_descriptor_set), write_descriptor_set, 0, nullptr
+        );
+
         vkCmdBindPipeline(
             image.video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             ui.video_pipeline.get()
@@ -590,12 +627,18 @@ VkResult view::render(ui& ui) {
 
         vkCmdBindDescriptorSets(
             image.video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            ui.video_pipeline_layout.get(), 0, 1, &ui.descriptor_set, 0, nullptr
+            ui.video_pipeline_layout.get(), 0, 1, 
+            &image.descriptor_set, 0, nullptr
         );
 
         vkCmdDraw(image.video_draw_command_buffer, 6, 1, 0, 0);
     }
 
+    check(vmaCopyMemoryToAllocation(
+        ui.allocator.get(), &ui.time, ui.uniform_allocation.get(), 
+        image_index * uniform_size, sizeof(float)
+    ));
+    
     if (recording) {
         vkCmdEndRenderPass(image.video_draw_command_buffer);
 
@@ -640,7 +683,7 @@ VkResult view::render(ui& ui) {
 }
 
 ui::ui(
-    VkPhysicalDevice physical_device, VkSurfaceKHR surface
+    VkInstance instance, VkPhysicalDevice physical_device, VkSurfaceKHR surface
 ) : physical_device(physical_device), surface(surface) {
     // look for available queue families
     uint32_t queue_family_count = 0;
@@ -712,6 +755,24 @@ ui::ui(
     // retrieve queues
     vkGetDeviceQueue(device.get(), graphics_queue_family, 0, &graphics_queue);
     vkGetDeviceQueue(device.get(), present_queue_family, 0, &present_queue);
+
+    // create allocator
+    {
+        VmaVulkanFunctions vulkan_functions = {
+            .vkGetInstanceProcAddr = &vkGetInstanceProcAddr,
+            .vkGetDeviceProcAddr = &vkGetDeviceProcAddr,
+        };
+
+        VmaAllocatorCreateInfo create_info = {
+            .physicalDevice = physical_device,
+            .device = device.get(),
+            .pVulkanFunctions = &vulkan_functions,
+            .instance = instance,
+            .vulkanApiVersion = VK_API_VERSION_1_0,
+        };
+        check(vmaCreateAllocator(&create_info, out_ptr(allocator)));
+        current_allocator = allocator.get();
+    }
 
     // create swap chains
     uint32_t format_count = 0, present_mode_count = 0;
@@ -831,8 +892,6 @@ ui::ui(
 void ui::render() {
     VkResult result = view.render(*this);
     if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR) {
-        view = {}; // delete first
-
-        view.render(*this);
+        std::exchange(view, {});
     }
 }

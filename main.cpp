@@ -76,44 +76,12 @@ int main() {
         nullptr, &supported_extension_count, supported_extensions.get()
     );
 
-    // check support for layers
-    const char* enabled_layers[]{
-        "VK_LAYER_KHRONOS_validation",
-    };
-
-    uint32_t layer_count;
-    vkEnumerateInstanceLayerProperties(&layer_count, nullptr);
-    auto layers = std::make_unique<VkLayerProperties[]>(layer_count);
-    vkEnumerateInstanceLayerProperties(&layer_count, layers.get());
-    for (const char* enabled_layer : enabled_layers) {
-        bool supported = false;
-        for (auto i = 0u; i < layer_count; i++) {
-            auto equal = strcmp(enabled_layer, layers[i].layerName);
-            if (equal == 0) {
-                supported = true;
-                break;
-            }
-        }
-        if (!supported) {
-            throw std::runtime_error("enabled layer not supported");
-        }
-    }
-
     // create instance
-    const char *required_extensions[]{
-        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
-    };
-    auto extension_count =
-        std::size(required_extensions) + glfw_extension_count;
+    auto extension_count = glfw_extension_count;
     auto extensions = std::make_unique<const char*[]>(extension_count);
     std::copy(
         glfw_extensions, glfw_extensions + glfw_extension_count,
         extensions.get()
-    );
-    std::copy(
-        required_extensions,
-        required_extensions + std::size(required_extensions),
-        extensions.get() + glfw_extension_count
     );
     unique_instance instance;
     {
@@ -121,8 +89,6 @@ int main() {
             .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pNext = nullptr,
             .pApplicationInfo = &application_info,
-            .enabledLayerCount = std::size(enabled_layers),
-            .ppEnabledLayerNames = enabled_layers,
             .enabledExtensionCount = static_cast<uint32_t>(extension_count),
             .ppEnabledExtensionNames = extensions.get(),
         };
@@ -180,9 +146,10 @@ int main() {
         }
     }
     
-    ::ui ui(physical_device, surface.get());
+    ::ui ui(instance.get(), physical_device, surface.get());
     
     while (!glfwWindowShouldClose(window.get())) {
+        ui.time = glfwGetTime();
         ui.render();
         
         glfwPollEvents();
