@@ -3,6 +3,7 @@
 #include "resources/vulkan_resources.h"
 #include "resources/vulkan_memory_allocator_resource.h"
 #include <memory>
+#include <vector>
 
 struct image;
 struct view;
@@ -10,6 +11,9 @@ struct ui;
 
 struct image {
     image() = default;
+
+    std::vector<unique_pipeline> pipelines;
+    std::vector<unique_sampler> samplers;
 
     unique_framebuffer swapchain_framebuffer;
     unique_image_view swapchain_image_view;
@@ -66,14 +70,13 @@ struct ui {
     unique_allocator allocator;
 
     dynamic_image tiles;
-    unique_sampler tiles_sampler;
 
     unique_descriptor_set_layout descriptor_set_layout;
 
     unique_render_pass render_pass;
 
     unique_pipeline_layout video_pipeline_layout;
-    unique_pipeline video_pipeline;
+    
     unique_buffer uniform_buffer;
     unique_allocation uniform_allocation;
 

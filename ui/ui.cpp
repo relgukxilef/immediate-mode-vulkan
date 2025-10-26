@@ -327,6 +327,17 @@ VkResult view::render(ui& ui) {
                 out_ptr(image.swapchain_framebuffer)
             ));
         }
+
+        VkCommandBufferAllocateInfo command_buffer_info = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = ui.command_pool.get(),
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        check(vkAllocateCommandBuffers(
+            ui.device.get(), &command_buffer_info, 
+            &image.video_draw_command_buffer
+        ));
     }
 
     auto fence = image.render_finished_fence.get();
@@ -340,17 +351,11 @@ VkResult view::render(ui& ui) {
     ));
 
     bool recording = !image.video_draw_command_buffer;
+    recording = true;
     if (recording) {
-        VkCommandBufferAllocateInfo command_buffer_info = {
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .commandPool = ui.command_pool.get(),
-            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-        check(vkAllocateCommandBuffers(
-            ui.device.get(), &command_buffer_info, 
-            &image.video_draw_command_buffer
-        ));
+        vkResetCommandBuffer(image.video_draw_command_buffer, 0);
+        image.pipelines.clear();
+        image.samplers.clear();
 
         VkCommandBufferBeginInfo begin_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -382,9 +387,10 @@ VkResult view::render(ui& ui) {
         );
     }
 
+    // begin object
     VkDeviceSize uniform_size = 128;
 
-    if (!ui.video_pipeline) {
+    if (!ui.video_pipeline_layout) {
         {
             auto descriptor_set_layout_binding = {
                 VkDescriptorSetLayoutBinding{
@@ -408,25 +414,6 @@ VkResult view::render(ui& ui) {
             check(vkCreateDescriptorSetLayout(
                 ui.device.get(), &create_info,
                 nullptr, out_ptr(ui.descriptor_set_layout)
-            ));
-        }
-
-        {
-            VkSamplerCreateInfo create_info = {
-                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                .magFilter = VK_FILTER_LINEAR,
-                .minFilter = VK_FILTER_LINEAR,
-                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                .anisotropyEnable = VK_FALSE,
-                .minLod = 0.0,
-                .maxLod = VK_LOD_CLAMP_NONE,
-            };
-            check(vkCreateSampler(
-                ui.device.get(), &create_info, nullptr, 
-                out_ptr(ui.tiles_sampler)
             ));
         }
 
@@ -460,7 +447,32 @@ VkResult view::render(ui& ui) {
                 out_ptr(ui.video_pipeline_layout)
             ));
         }
+    }
 
+    if (recording) {
+        image.samplers.push_back({});
+
+        {
+            VkSamplerCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                .magFilter = VK_FILTER_LINEAR,
+                .minFilter = VK_FILTER_LINEAR,
+                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .anisotropyEnable = VK_FALSE,
+                .minLod = 0.0,
+                .maxLod = VK_LOD_CLAMP_NONE,
+            };
+            check(vkCreateSampler(
+                ui.device.get(), &create_info, nullptr, 
+                out_ptr(image.samplers.back())
+            ));
+        }
+
+        image.pipelines.push_back({});
+        
         // TODO: use VkPipelineCache
         unique_shader_module video_vertex, video_fragment;
         create_shader(
@@ -469,7 +481,7 @@ VkResult view::render(ui& ui) {
         create_shader(
             ui.device, "ui/video_fragment.glsl.spv", video_fragment
         );
-        
+    
         auto shader_stages = {
             VkPipelineShaderStageCreateInfo{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -544,7 +556,7 @@ VkResult view::render(ui& ui) {
         };
         check(vkCreateGraphicsPipelines(
             ui.device.get(), nullptr, 1, &create_info, nullptr,
-            out_ptr(ui.video_pipeline)
+            out_ptr(image.pipelines.back())
         ));
     }
 
@@ -560,6 +572,7 @@ VkResult view::render(ui& ui) {
         };
         VkDescriptorPoolCreateInfo create_info = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT ,
             .maxSets = image_count,
             .poolSizeCount = std::size(pool_size),
             .pPoolSizes = pool_size,
@@ -571,6 +584,10 @@ VkResult view::render(ui& ui) {
     }
 
     if (recording) {
+        vkFreeDescriptorSets(
+            ui.device.get(), descriptor_pool.get(), 1, &image.descriptor_set
+        );
+
         auto layout = ui.descriptor_set_layout.get();
         VkDescriptorSetAllocateInfo descriptor_set_allocate_info = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -584,7 +601,7 @@ VkResult view::render(ui& ui) {
         ));
         VkDescriptorImageInfo descriptor_image_info[] = {
             {
-                .sampler = ui.tiles_sampler.get(),
+                .sampler = image.samplers.back().get(),
                 .imageView = ui.tiles.image_view.get(),
                 .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
             },
@@ -622,7 +639,7 @@ VkResult view::render(ui& ui) {
 
         vkCmdBindPipeline(
             image.video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            ui.video_pipeline.get()
+            image.pipelines.back().get()
         );
 
         vkCmdBindDescriptorSets(
@@ -638,6 +655,7 @@ VkResult view::render(ui& ui) {
         ui.allocator.get(), &ui.time, ui.uniform_allocation.get(), 
         image_index * uniform_size, sizeof(float)
     ));
+    // end object
     
     if (recording) {
         vkCmdEndRenderPass(image.video_draw_command_buffer);
@@ -813,6 +831,7 @@ ui::ui(
     {
         VkCommandPoolCreateInfo create_info{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             .queueFamilyIndex = graphics_queue_family,
         };
         check(vkCreateCommandPool(
