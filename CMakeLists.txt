@@ -51,6 +51,7 @@ add_executable(
     resources/vulkan_memory_allocator_resource.cpp
     resources/vulkan_memory_allocator_resource.h
     ui/ui.cpp ui/ui.h
+    ui/draw.cpp ui/draw.h
 )
 
 target_link_libraries(
