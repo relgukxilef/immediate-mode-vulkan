@@ -149,7 +149,7 @@ int main() {
     ::ui ui(instance.get(), physical_device, surface.get());
     
     while (!glfwWindowShouldClose(window.get())) {
-        ui.time = glfwGetTime();
+        ui.time = float(glfwGetTime());
         ui.render();
         
         glfwPollEvents();
