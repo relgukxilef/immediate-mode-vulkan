@@ -789,31 +789,24 @@ bool draw(const draw_info& info) {
         image.pipelines.push_back({});
         
         // TODO: use VkPipelineCache
-        ui.shader_modules.resize(info.shaderModuleCodeFileNames.size());
-        ui.pipeline_shader_stages.resize(info.shaderModuleCodeFileNames.size());
+        ui.shader_modules.resize(info.stages.size());
+        ui.pipeline_shader_stages.resize(info.stages.size());
 
-        for (auto i = 0u; i < info.shaderModuleCodeFileNames.size(); i++) {
+        for (auto i = 0u; i < info.stages.size(); i++) {
             create_shader(
-                ui.device, *(info.shaderModuleCodeFileNames.begin() + i), 
+                ui.device, (info.stages.begin() + i)->codeFileName, 
                 ui.shader_modules[i]
             );
+            VkPipelineShaderStageCreateInfo create_info = 
+                (info.stages.begin() + i)->info;
+            create_info.sType = 
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            create_info.module = ui.shader_modules[i].get();
+            if (create_info.pName == nullptr)
+                create_info.pName = "main";
+            ui.pipeline_shader_stages[i] = create_info;
         }
 
-        // TODO
-    
-        auto shader_stages = {
-            VkPipelineShaderStageCreateInfo{
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                .module = ui.shader_modules[0].get(),
-                .pName = "main",
-            }, VkPipelineShaderStageCreateInfo{
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                .module = ui.shader_modules[1].get(),
-                .pName = "main",
-            },
-        };
         VkPipelineVertexInputStateCreateInfo pipeline_vertex_input_state = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         };
@@ -862,8 +855,8 @@ bool draw(const draw_info& info) {
         };
         VkGraphicsPipelineCreateInfo create_info = {
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .stageCount = static_cast<uint32_t>(shader_stages.size()),
-            .pStages = shader_stages.begin(),
+            .stageCount = uint32_t(ui.pipeline_shader_stages.size()),
+            .pStages = ui.pipeline_shader_stages.data(),
             .pVertexInputState = &pipeline_vertex_input_state,
             .pInputAssemblyState = &pipeline_input_assembly_state,
             .pViewportState = &pipeline_viewport_state,
