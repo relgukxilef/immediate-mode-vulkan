@@ -146,7 +146,10 @@ int main() {
         }
     }
     
-    ::ui ui(instance.get(), physical_device, surface.get());
+    renderer r(instance.get(), physical_device, surface.get());
+    global_renderer = &r;
+
+    ::ui ui;
     
     while (!glfwWindowShouldClose(window.get())) {
         ui.time = float(glfwGetTime());
