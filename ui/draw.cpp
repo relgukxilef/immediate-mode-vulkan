@@ -8,9 +8,18 @@ using namespace std;
 
 renderer* global_renderer;
 
+size_t aligned(size_t size, size_t alignment) {
+    return alignment * ((size - 1) / alignment + 1);
+}
+
 struct image {
     std::vector<unique_pipeline> pipelines;
     std::vector<unique_sampler> samplers;
+
+    // TODO: allocate uniform data from a shared buffer
+    size_t uniform_buffer_size = 0, uniform_buffer_capacity = 1024 * 1024;
+    unique_buffer uniform_buffer;
+    unique_allocation uniform_allocation;
 
     unique_framebuffer swapchain_framebuffer;
     unique_image_view swapchain_image_view;
@@ -18,9 +27,8 @@ struct image {
     unique_semaphore render_finished_semaphore;
     unique_fence render_finished_fence;
 
-    // TODO: descriptor sets usually aren't resolution-dependent, could be in ui
-    VkDescriptorSet descriptor_set;
-    VkCommandBuffer video_draw_command_buffer;
+    std::vector<VkDescriptorSet> descriptor_sets;
+    VkCommandBuffer command_buffer;
 };
 
 struct view {
@@ -51,6 +59,8 @@ struct renderer_data {
     VkPhysicalDevice physical_device;
     VkSurfaceKHR surface;
 
+    size_t offset_alignment;
+
     unique_device device;
     VkQueue graphics_queue, present_queue;
     unique_command_pool command_pool;
@@ -65,9 +75,6 @@ struct renderer_data {
 
     unique_pipeline_layout video_pipeline_layout;
     
-    unique_buffer uniform_buffer;
-    unique_allocation uniform_allocation;
-
     unique_semaphore swapchain_image_ready_semaphore;
 
     view view;
@@ -271,6 +278,11 @@ renderer::renderer(
     d->physical_device = physical_device;
     d->surface = surface;
     auto &r = *d;
+
+    VkPhysicalDeviceProperties properties;
+    vkGetPhysicalDeviceProperties(physical_device, &properties);
+    d->offset_alignment = properties.limits.minUniformBufferOffsetAlignment;
+
     // look for available queue families
     uint32_t queue_family_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(
@@ -643,7 +655,7 @@ void wait_frame(renderer* renderer) {
         };
         check(vkAllocateCommandBuffers(
             r.device.get(), &command_buffer_info, 
-            &image.video_draw_command_buffer
+            &image.command_buffer
         ));
     }
 
@@ -657,18 +669,26 @@ void wait_frame(renderer* renderer) {
         r.device.get(), 1, &fence
     ));
 
-    bool recording = !image.video_draw_command_buffer;
+    bool recording = !image.command_buffer;
     recording = true;
     if (recording) {
-        vkResetCommandBuffer(image.video_draw_command_buffer, 0);
+        vkResetCommandBuffer(image.command_buffer, 0);
         image.pipelines.clear();
         image.samplers.clear();
+        if (!image.descriptor_sets.empty())
+            vkFreeDescriptorSets(
+                r.device.get(), view.descriptor_pool.get(), 
+                image.descriptor_sets.size(), 
+                image.descriptor_sets.data()
+            );
+        image.descriptor_sets.clear();
+        image.uniform_buffer_size = 0;
 
         VkCommandBufferBeginInfo begin_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         };
         check(vkBeginCommandBuffer(
-            image.video_draw_command_buffer, &begin_info
+            image.command_buffer, &begin_info
         ));
         
         auto clear_values = {
@@ -689,7 +709,7 @@ void wait_frame(renderer* renderer) {
         };
 
         vkCmdBeginRenderPass(
-            image.video_draw_command_buffer, &render_pass_begin_info,
+            image.command_buffer, &render_pass_begin_info,
             VK_SUBPASS_CONTENTS_INLINE
         );
     }
@@ -733,24 +753,6 @@ bool draw(const draw_info& info) {
         }
 
         {
-            VkBufferCreateInfo create_info {
-                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .size = view.image_count * uniform_size,
-                .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            };
-            VmaAllocationCreateInfo allocation_create_info {
-                .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-                .usage = VMA_MEMORY_USAGE_AUTO,
-            };
-            check(vmaCreateBuffer(
-                ui.allocator.get(), &create_info, &allocation_create_info,
-                out_ptr(ui.uniform_buffer), out_ptr(ui.uniform_allocation),
-                nullptr
-            ));
-        }
-
-        {
             auto layout = ui.descriptor_set_layout.get();
             VkPipelineLayoutCreateInfo create_info = {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -760,6 +762,27 @@ bool draw(const draw_info& info) {
             check(vkCreatePipelineLayout(
                 ui.device.get(), &create_info, nullptr, 
                 out_ptr(ui.video_pipeline_layout)
+            ));
+        }
+    }
+
+    if (!image.uniform_buffer) {
+        {
+            VkBufferCreateInfo create_info {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .size = image.uniform_buffer_capacity,
+                .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            };
+            VmaAllocationCreateInfo allocation_create_info {
+                .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .usage = VMA_MEMORY_USAGE_AUTO,
+            };
+            check(vmaCreateBuffer(
+                ui.allocator.get(), &create_info, &allocation_create_info,
+                out_ptr(image.uniform_buffer), 
+                out_ptr(image.uniform_allocation),
+                nullptr
             ));
         }
     }
@@ -874,6 +897,8 @@ bool draw(const draw_info& info) {
     }
 
     if (!view.descriptor_pool) {
+        // TODO: may need a separate pool per pipeline layout
+        unsigned max_draw_count = 1024; // TODO: grow
         VkDescriptorPoolSize pool_size[] = {
             {
                 .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -886,7 +911,7 @@ bool draw(const draw_info& info) {
         VkDescriptorPoolCreateInfo create_info = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT ,
-            .maxSets = view.image_count,
+            .maxSets = view.image_count * max_draw_count,
             .poolSizeCount = std::size(pool_size),
             .pPoolSizes = pool_size,
         };
@@ -897,11 +922,7 @@ bool draw(const draw_info& info) {
     }
 
     if (recording) {
-        vkFreeDescriptorSets(
-            ui.device.get(), view.descriptor_pool.get(), 1, 
-            &image.descriptor_set
-        );
-
+        image.descriptor_sets.push_back({});
         auto layout = ui.descriptor_set_layout.get();
         VkDescriptorSetAllocateInfo descriptor_set_allocate_info = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -911,7 +932,7 @@ bool draw(const draw_info& info) {
         };
         check(vkAllocateDescriptorSets(
             ui.device.get(), &descriptor_set_allocate_info, 
-            &image.descriptor_set
+            &image.descriptor_sets.back()
         ));
         VkDescriptorImageInfo descriptor_image_info[] = {
             {
@@ -922,15 +943,15 @@ bool draw(const draw_info& info) {
         };
         VkDescriptorBufferInfo descriptor_buffer_info[] = {
             {
-                .buffer = ui.uniform_buffer.get(),
-                .offset = view.image_index * uniform_size,
+                .buffer = image.uniform_buffer.get(),
+                .offset = image.uniform_buffer_size,
                 .range = uniform_size,
             }
         };
         VkWriteDescriptorSet write_descriptor_set[] = {
             {
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = image.descriptor_set,
+                .dstSet = image.descriptor_sets.back(),
                 .dstBinding = 0,
                 .dstArrayElement = 0,
                 .descriptorCount = uint32_t(size(descriptor_image_info)),
@@ -938,7 +959,7 @@ bool draw(const draw_info& info) {
                 .pImageInfo = descriptor_image_info,
             }, {
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = image.descriptor_set,
+                .dstSet = image.descriptor_sets.back(),
                 .dstBinding = 1,
                 .dstArrayElement = 0,
                 .descriptorCount = uint32_t(size(descriptor_buffer_info)),
@@ -952,24 +973,30 @@ bool draw(const draw_info& info) {
         );
 
         vkCmdBindPipeline(
-            image.video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             image.pipelines.back().get()
         );
 
         vkCmdBindDescriptorSets(
-            image.video_draw_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             ui.video_pipeline_layout.get(), 0, 1, 
-            &image.descriptor_set, 0, nullptr
+            &image.descriptor_sets.back(), 0, nullptr
         );
 
-        vkCmdDraw(image.video_draw_command_buffer, info.vertexCount, 1, 0, 0);
+        vkCmdDraw(image.command_buffer, info.vertexCount, 1, 0, 0);
     }
 
+    // TODO: store offset in uniform_buffer?
     check(vmaCopyMemoryToAllocation(
         ui.allocator.get(), info.copyMemoryToUniformBufferSrcHostPointer, 
-        ui.uniform_allocation.get(), 
-        view.image_index * uniform_size, info.copyMemoryToUniformBufferSize
+        image.uniform_allocation.get(), 
+        image.uniform_buffer_size, info.copyMemoryToUniformBufferSize
     ));
+
+    if (recording) {
+        image.uniform_buffer_size += 
+            aligned(info.copyMemoryToUniformBufferSize, ui.offset_alignment);
+    }
 
     return true;
 }
@@ -983,9 +1010,9 @@ void submit(renderer* renderer) {
     bool recording = true; // TODO
 
     if (recording) {
-        vkCmdEndRenderPass(image.video_draw_command_buffer);
+        vkCmdEndRenderPass(image.command_buffer);
 
-        check(vkEndCommandBuffer(image.video_draw_command_buffer));
+        check(vkEndCommandBuffer(image.command_buffer));
     }
 
     auto wait_semaphore = ui.swapchain_image_ready_semaphore.get();
@@ -998,7 +1025,7 @@ void submit(renderer* renderer) {
         .pWaitSemaphores = &wait_semaphore,
         .pWaitDstStageMask = &wait_stage,
         .commandBufferCount = 1,
-        .pCommandBuffers = &image.video_draw_command_buffer,
+        .pCommandBuffers = &image.command_buffer,
         .signalSemaphoreCount = 1,
         .pSignalSemaphores = &signal_semaphore,
     };
