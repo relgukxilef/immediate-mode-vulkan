@@ -47,16 +47,6 @@ namespace imv {
 
     struct renderer_data;
 
-    struct dynamic_image {
-        dynamic_image() = default;
-        dynamic_image(renderer_data& renderer, unsigned size);
-
-        unique_device_memory device_memory;
-        unique_image image;
-        unique_image_view image_view;
-        uint8_t* buffer;
-    };
-
     struct renderer_data {
         VkPhysicalDevice physical_device;
         VkSurfaceKHR surface;
@@ -68,8 +58,6 @@ namespace imv {
         unique_command_pool command_pool;
 
         unique_allocator allocator;
-
-        dynamic_image tiles;
 
         unique_descriptor_set_layout descriptor_set_layout;
 
@@ -121,157 +109,6 @@ namespace imv {
         check(vkCreateShaderModule(
             device.get(), &create_info, nullptr, out_ptr(module)
         ));
-    }
-
-    dynamic_image::dynamic_image(renderer_data& r, unsigned size) {
-        {
-            unsigned width = size, height = size;
-            VkImageCreateInfo create_info = {
-                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-                .imageType = VK_IMAGE_TYPE_2D,
-                .format = VK_FORMAT_R8G8B8A8_SRGB,
-                .extent = {
-                    .width = width,
-                    .height = height,
-                    .depth = 1,
-                },
-                .mipLevels = 1,
-                .arrayLayers = 1,
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                .tiling = VK_IMAGE_TILING_LINEAR,
-                .usage =
-                    VK_IMAGE_USAGE_TRANSFER_DST_BIT | 
-                    VK_IMAGE_USAGE_SAMPLED_BIT,
-                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            };
-            check(vkCreateImage(
-                r.device.get(), &create_info, nullptr, out_ptr(image)
-            ));
-            VkMemoryRequirements memory_requirements;
-            vkGetImageMemoryRequirements(
-                r.device.get(), image.get(), &memory_requirements
-            );
-
-            uint32_t memory_type = 0;
-            VkMemoryPropertyFlags properties =
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-
-            for (uint32_t i = 0; i < r.memory_properties.memoryTypeCount; i++) {
-                if (
-                    (memory_requirements.memoryTypeBits & (1 << i)) &&
-                    (
-                        r.memory_properties.memoryTypes[i].propertyFlags &
-                        properties
-                    ) == properties
-                ) {
-                    memory_type = i;
-                    break;
-                }
-            }
-
-            VkMemoryAllocateInfo allocate_info = {
-                .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                .allocationSize = memory_requirements.size,
-                .memoryTypeIndex = memory_type,
-            };
-            check(vkAllocateMemory(
-                r.device.get(), &allocate_info, nullptr,
-                out_ptr(device_memory)
-            ));
-
-            check(vkBindImageMemory(
-                r.device.get(), image.get(), device_memory.get(), 0
-            ));
-
-            check(vkMapMemory(
-                r.device.get(), device_memory.get(), 0, width * height * 4, 0,
-                reinterpret_cast<void**>(&buffer)
-            ));
-        }
-
-        {
-            // transition image from undefined to general layout
-            VkCommandBuffer command_buffer;
-
-            VkCommandBufferAllocateInfo allocate_info = {
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                .commandPool = r.command_pool.get(),
-                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                .commandBufferCount = 1,
-            };
-            check(vkAllocateCommandBuffers(
-                r.device.get(), &allocate_info, &command_buffer
-            ));
-
-            VkCommandBufferBeginInfo begin_info = {
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            };
-
-            check(vkBeginCommandBuffer(command_buffer, &begin_info));
-
-            VkImageMemoryBarrier image_memory_barrier = {
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = image.get(),
-                .subresourceRange = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-            };
-
-            vkCmdPipelineBarrier(
-                command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, 
-                nullptr, 1,
-                &image_memory_barrier
-            );
-
-            check(vkEndCommandBuffer(command_buffer));
-
-            VkSubmitInfo submit_info = {
-                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .commandBufferCount = 1,
-                .pCommandBuffers = &command_buffer,
-            };
-            check(vkQueueSubmit(
-                r.graphics_queue, 1, &submit_info, VK_NULL_HANDLE
-            ));
-            check(vkQueueWaitIdle(r.graphics_queue)); // TODO: use fence instead
-            // TODO: use destructor instead
-            vkFreeCommandBuffers(
-                r.device.get(), r.command_pool.get(), 1, &command_buffer
-            );
-        }
-
-        {
-            VkImageViewCreateInfo create_info = {
-                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .image = image.get(),
-                .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                .format = VK_FORMAT_R8G8B8A8_SRGB,
-                .subresourceRange = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-            };
-            check(vkCreateImageView(
-                r.device.get(), &create_info, nullptr, out_ptr(image_view)
-            ));
-        }
-
-        fill(buffer, buffer + size * size * 4, 255);
     }
 
     renderer::renderer(
@@ -430,8 +267,6 @@ namespace imv {
         vkGetPhysicalDeviceMemoryProperties(
             r.physical_device, &r.memory_properties
         );
-
-        r.tiles = dynamic_image(r, 2048);
 
         {
             auto attachments = {
@@ -951,13 +786,6 @@ namespace imv {
                 r.device.get(), &descriptor_set_allocate_info, 
                 &image.descriptor_sets.back()
             ));
-            VkDescriptorImageInfo descriptor_image_info[] = {
-                {
-                    .sampler = image.samplers.back().get(),
-                    .imageView = r.tiles.image_view.get(),
-                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-                },
-            };
             VkDescriptorBufferInfo descriptor_buffer_info[] = {
                 {
                     .buffer = image.uniform_buffer.get(),
@@ -967,14 +795,6 @@ namespace imv {
             };
             VkWriteDescriptorSet write_descriptor_set[] = {
                 {
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = image.descriptor_sets.back(),
-                    .dstBinding = 0,
-                    .dstArrayElement = 0,
-                    .descriptorCount = uint32_t(size(descriptor_image_info)),
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = descriptor_image_info,
-                }, {
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .dstSet = image.descriptor_sets.back(),
                     .dstBinding = 1,
