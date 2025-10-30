@@ -7,7 +7,7 @@
 using namespace std;
 
 void ui::render() {
-    wait_frame();
+    imv::wait_frame();
 
     struct {
         float time;
@@ -15,7 +15,7 @@ void ui::render() {
 
     uniforms.time = time;
 
-    draw({
+    imv::draw({
         .stages = {
             { 
                 .codeFileName = "ui/video_vertex.glsl.spv",
@@ -32,7 +32,7 @@ void ui::render() {
     
     uniforms.time = time + 3.14f;
 
-    draw({
+    imv::draw({
         .stages = {
             { 
                 .codeFileName = "ui/video_vertex.glsl.spv",
@@ -47,5 +47,5 @@ void ui::render() {
         .vertexCount = 6,
     });
     
-    submit();
+    imv::submit();
 }

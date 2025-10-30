@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.5)
 
-project(raytrace LANGUAGES CXX)
+project(ImmediateModeVulkan LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,25 +43,38 @@ FetchContent_MakeAvailable(VulkanMemoryAllocator)
 
 find_package(Vulkan 1.1)
 
-add_executable(
-    raytrace
-    main.cpp
-    resources/vulkan_resources.cpp
-    resources/vulkan_resources.h
-    resources/vulkan_memory_allocator_resource.cpp
-    resources/vulkan_memory_allocator_resource.h
-    ui/ui.cpp ui/ui.h
-    ui/draw.cpp ui/draw.h
+add_library(
+    ImmediateModeVulkan SHARED
+    source/draw.cpp 
+    include/immediate_mode_vulkan/draw.h
+    source/resources/vulkan_resources.cpp
+    include/immediate_mode_vulkan/resources/vulkan_resources.h
+    source/resources/vulkan_memory_allocator_resource.cpp
+    include/immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h
 )
 
 target_link_libraries(
-    raytrace
+    ImmediateModeVulkan
     gdi32 user32 kernel32 Vulkan::Vulkan glfw Vulkan::Headers glm
     VulkanMemoryAllocator
 )
 
 target_include_directories(
-    raytrace PRIVATE 
+    ImmediateModeVulkan PUBLIC include
+)
+
+add_executable(
+    demo
+    demo/main.cpp
+    demo/ui.cpp demo/ui.h
+)
+
+target_link_libraries(
+    demo PRIVATE ImmediateModeVulkan
+)
+
+target_include_directories(
+    demo PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -87,15 +100,15 @@ function(add_shader TARGET SHADER)
     )
 endfunction(add_shader)
 
-add_shader(raytrace ui/video_vertex.glsl)
-add_shader(raytrace ui/video_fragment.glsl)
+add_shader(demo demo/video_vertex.glsl)
+add_shader(demo demo/video_fragment.glsl)
 
 target_compile_options(
-    raytrace PUBLIC
+    ImmediateModeVulkan PUBLIC
     -Wall
     $<$<CONFIG:Debug>:-g -O0 -D_FORTIFY_SOURCE=2 /fsanitize=address>
 )
 target_link_options(
-    raytrace PUBLIC
+    ImmediateModeVulkan PUBLIC
     $<$<CONFIG:Debug>:-g -O0 -D_FORTIFY_SOURCE=2>
 )

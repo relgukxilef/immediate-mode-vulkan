@@ -10,8 +10,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#include "resources/vulkan_resources.h"
-#include "ui/ui.h"
+#include <immediate_mode_vulkan/resources/vulkan_resources.h>
+#include "ui.h"
 
 using std::unique_ptr;
 using std::out_ptr;
@@ -83,7 +83,7 @@ int main() {
         glfw_extensions, glfw_extensions + glfw_extension_count,
         extensions.get()
     );
-    unique_instance instance;
+    imv::unique_instance instance;
     {
         VkInstanceCreateInfo createInfo{
             .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
@@ -92,15 +92,15 @@ int main() {
             .enabledExtensionCount = static_cast<uint32_t>(extension_count),
             .ppEnabledExtensionNames = extensions.get(),
         };
-        check(vkCreateInstance(
+        imv::check(vkCreateInstance(
             &createInfo, nullptr, out_ptr(instance)
         ));
     }
-    current_instance = instance.get();
+    imv::current_instance = instance.get();
 
     // create surface
-    unique_surface surface;
-    check(glfwCreateWindowSurface(
+    imv::unique_surface surface;
+    imv::check(glfwCreateWindowSurface(
         instance.get(), window.get(), nullptr, out_ptr(surface)
     ));
 
@@ -108,13 +108,15 @@ int main() {
     VkPhysicalDevice physical_device;
 
     uint32_t device_count = 0;
-    check(vkEnumeratePhysicalDevices(instance.get(), &device_count, nullptr));
+    imv::check(vkEnumeratePhysicalDevices(
+        instance.get(), &device_count, nullptr
+    ));
     if (device_count == 0) {
         throw std::runtime_error("no Vulkan capable GPU found");
     }
     {
         auto devices = std::make_unique<VkPhysicalDevice[]>(device_count);
-        check(vkEnumeratePhysicalDevices(
+        imv::check(vkEnumeratePhysicalDevices(
             instance.get(), &device_count, devices.get()
         ));
         // TODO: check for VK_KHR_swapchain support
@@ -146,8 +148,8 @@ int main() {
         }
     }
     
-    renderer r(instance.get(), physical_device, surface.get());
-    global_renderer = &r;
+    imv::renderer r(instance.get(), physical_device, surface.get());
+    imv::global_renderer = &r;
 
     ::ui ui;
     
