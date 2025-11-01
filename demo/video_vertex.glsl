@@ -1,7 +1,7 @@
 #version 450
 #pragma shader_stage(vertex)
 
-layout (std140, binding = 1) uniform parameters {
+layout (std140, binding = 0) uniform parameters {
     float time;
 };
 
