@@ -3,6 +3,8 @@
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
 
 #include <vector>
+#include <unordered_map>
+#include <filesystem>
 
 using namespace std;
 
@@ -15,8 +17,8 @@ namespace imv {
     }
 
     struct image {
-        std::vector<unique_pipeline> pipelines;
-        std::vector<unique_sampler> samplers;
+        vector<unique_pipeline> pipelines;
+        vector<unique_sampler> samplers;
 
         // TODO: allocate uniform data from a shared buffer
         size_t uniform_buffer_size = 0, uniform_buffer_capacity = 1024 * 1024;
@@ -29,7 +31,7 @@ namespace imv {
         unique_semaphore render_finished_semaphore;
         unique_fence render_finished_fence;
 
-        std::vector<VkDescriptorSet> descriptor_sets;
+        vector<VkDescriptorSet> descriptor_sets;
         VkCommandBuffer command_buffer;
     };
 
@@ -45,7 +47,20 @@ namespace imv {
         uint32_t image_index;
     };
 
-    struct renderer_data;
+    struct shader_module_file {
+        unique_shader_module shader_module;
+        filesystem::file_time_type last_update;
+    };
+
+    struct string_hash {
+        typedef void is_transparent;
+        size_t operator()(const string& s) const {
+            return operator()(string_view(s));
+        }
+        size_t operator()(const string_view& s) const {
+            return hash<string_view>()(s);
+        }
+    };
 
     struct renderer_data {
         VkPhysicalDevice physical_device;
@@ -73,8 +88,11 @@ namespace imv {
         VkSurfaceFormatKHR surface_format;
         VkPhysicalDeviceMemoryProperties memory_properties;
         
-        vector<unique_shader_module> shader_modules;
         vector<VkPipelineShaderStageCreateInfo> pipeline_shader_stages;
+
+        unordered_map<
+            string, shader_module_file, string_hash, equal_to<>
+        > shader_cache;
     };
 
     struct file_deleter {
@@ -572,12 +590,6 @@ namespace imv {
                 auto descriptor_set_layout_binding = {
                     VkDescriptorSetLayoutBinding{
                         .binding = 0,
-                        .descriptorType = 
-                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                        .descriptorCount = 1,
-                        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-                    }, {
-                        .binding = 1,
                         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                         .descriptorCount = 1,
                         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
@@ -657,19 +669,27 @@ namespace imv {
             image.pipelines.push_back({});
             
             // TODO: use VkPipelineCache
-            r.shader_modules.resize(info.stages.size());
             r.pipeline_shader_stages.resize(info.stages.size());
 
             for (auto i = 0u; i < info.stages.size(); i++) {
-                create_shader(
-                    r.device, (info.stages.begin() + i)->codeFileName, 
-                    r.shader_modules[i]
-                );
+                const char* fileName = (info.stages.begin() + i)->codeFileName;
+                string_view fileNameView = fileName;
+                auto entry = r.shader_cache.find(fileNameView);
+                if (entry == r.shader_cache.end()) {
+                    shader_module_file file;
+                    create_shader(
+                        r.device, fileName, 
+                        file.shader_module
+                    );
+                    entry = r.shader_cache.insert(
+                        {string(fileNameView), std::move(file)}
+                    ).first;
+                }
                 VkPipelineShaderStageCreateInfo create_info = 
                     (info.stages.begin() + i)->info;
                 create_info.sType = 
                     VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-                create_info.module = r.shader_modules[i].get();
+                create_info.module = entry->second.shader_module.get();
                 if (create_info.pName == nullptr)
                     create_info.pName = "main";
                 r.pipeline_shader_stages[i] = create_info;
@@ -745,7 +765,6 @@ namespace imv {
                 r.device.get(), nullptr, 1, &create_info, nullptr,
                 out_ptr(image.pipelines.back())
             ));
-            r.shader_modules.clear();
         }
 
         if (!view.descriptor_pool) {
@@ -753,9 +772,6 @@ namespace imv {
             unsigned max_draw_count = 1024; // TODO: grow
             VkDescriptorPoolSize pool_size[] = {
                 {
-                    .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .descriptorCount = 1,
-                }, {
                     .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .descriptorCount = 1,
                 }, 
@@ -797,7 +813,7 @@ namespace imv {
                 {
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .dstSet = image.descriptor_sets.back(),
-                    .dstBinding = 1,
+                    .dstBinding = 0,
                     .dstArrayElement = 0,
                     .descriptorCount = uint32_t(size(descriptor_buffer_info)),
                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
