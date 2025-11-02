@@ -113,22 +113,6 @@ namespace imv {
         return content;
     }
 
-    void create_shader(
-        unique_device& device, const char* name,
-        unique_shader_module& module
-    ) {
-        auto code = read_file(name);
-        VkShaderModuleCreateInfo create_info = {
-            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .codeSize = (size_t)(code.size()),
-            .pCode = reinterpret_cast<uint32_t*>(code.data()),
-        };
-
-        check(vkCreateShaderModule(
-            device.get(), &create_info, nullptr, out_ptr(module)
-        ));
-    }
-
     renderer::renderer(
         VkInstance instance, VkPhysicalDevice physical_device, 
         VkSurfaceKHR surface
@@ -674,16 +658,25 @@ namespace imv {
             for (auto i = 0u; i < info.stages.size(); i++) {
                 const char* fileName = (info.stages.begin() + i)->codeFileName;
                 string_view fileNameView = fileName;
-                auto entry = r.shader_cache.find(fileNameView);
-                if (entry == r.shader_cache.end()) {
-                    shader_module_file file;
-                    create_shader(
-                        r.device, fileName, 
-                        file.shader_module
+                auto insert = r.shader_cache.insert({string(fileNameView), {}});
+                auto last_write = filesystem::last_write_time(fileNameView);
+                auto entry = insert.first;
+                if (insert.second || last_write > entry->second.last_update) {
+                    entry->second.last_update = last_write;
+                    auto code = read_file(fileName);
+                    VkShaderModuleCreateInfo create_info = {
+                        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+                        .codeSize = (size_t)(code.size()),
+                        .pCode = reinterpret_cast<uint32_t*>(code.data()),
+                    };
+                    unique_shader_module shader_module;
+                    auto result = vkCreateShaderModule(
+                        r.device.get(), &create_info, nullptr, 
+                        out_ptr(shader_module)
                     );
-                    entry = r.shader_cache.insert(
-                        {string(fileNameView), std::move(file)}
-                    ).first;
+                    if (result == VK_SUCCESS) {
+                        entry->second.shader_module = std::move(shader_module);
+                    }
                 }
                 VkPipelineShaderStageCreateInfo create_info = 
                     (info.stages.begin() + i)->info;
