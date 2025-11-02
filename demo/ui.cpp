@@ -15,37 +15,24 @@ void ui::render() {
 
     uniforms.time = time;
 
-    imv::draw({
-        .stages = {
-            { 
-                .codeFileName = "ui/video_vertex.glsl.spv",
-                .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
-            }, { 
-                .codeFileName = "ui/video_fragment.glsl.spv",
-                .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
-            }, 
-        },
-        .copyMemoryToUniformBufferSrcHostPointer = &uniforms,
-        .copyMemoryToUniformBufferSize = sizeof(uniforms),
-        .vertexCount = 6,
-    });
-    
-    uniforms.time = time + 3.14f;
+    for (auto i = 0u; i < 1000; i++) {
+        imv::draw({
+            .stages = {
+                { 
+                    .codeFileName = "demo/video_vertex.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
+                }, { 
+                    .codeFileName = "demo/video_fragment.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
+                }, 
+            },
+            .copyMemoryToUniformBufferSrcHostPointer = &uniforms,
+            .copyMemoryToUniformBufferSize = sizeof(uniforms),
+            .vertexCount = 6,
+        });
+        
+        uniforms.time += 3.14f / 50;
+    }
 
-    imv::draw({
-        .stages = {
-            { 
-                .codeFileName = "ui/video_vertex.glsl.spv",
-                .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
-            }, { 
-                .codeFileName = "ui/video_fragment.glsl.spv",
-                .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
-            }, 
-        },
-        .copyMemoryToUniformBufferSrcHostPointer = &uniforms,
-        .copyMemoryToUniformBufferSize = sizeof(uniforms),
-        .vertexCount = 6,
-    });
-    
     imv::submit();
 }
