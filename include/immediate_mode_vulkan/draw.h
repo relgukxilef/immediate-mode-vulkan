@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
+#include <string_view>
 
 namespace imv {
     struct renderer {
@@ -19,18 +20,25 @@ namespace imv {
     void wait_frame(renderer* renderer = nullptr);
 
     struct stage_info {
-        const char* codeFileName;
+        // TODO: replace with string_view
+        const char* code_file_name;
         VkPipelineShaderStageCreateInfo info;
     };
 
+    struct image_info {
+        std::string_view file_name;
+        VkSamplerCreateInfo sampler_info;
+    };
+
     struct draw_info {
+        // TODO: maybe use snake case everywhere
         renderer* renderer = nullptr;
         bool prepare_only = false;
-        const VkDescriptorSetLayoutCreateInfo* descriptor_set_layout;
         std::initializer_list<stage_info> stages;
-        const void* copyMemoryToUniformBufferSrcHostPointer;
-        VkDeviceSize copyMemoryToUniformBufferSize;
-        uint32_t vertexCount = 0;
+        std::initializer_list<image_info> images;
+        const void* uniform_source_pointer;
+        VkDeviceSize uniform_source_size;
+        uint32_t vertex_count = 0;
     };
 
     bool draw(const draw_info&);

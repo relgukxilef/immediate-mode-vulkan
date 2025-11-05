@@ -44,7 +44,7 @@ FetchContent_MakeAvailable(VulkanMemoryAllocator)
 find_package(Vulkan 1.1)
 
 add_library(
-    ImmediateModeVulkan SHARED
+    ImmediateModeVulkan STATIC
     source/draw.cpp 
     include/immediate_mode_vulkan/draw.h
     source/resources/vulkan_resources.cpp
@@ -102,6 +102,13 @@ endfunction(add_shader)
 
 add_shader(demo demo/video_vertex.glsl)
 add_shader(demo demo/video_fragment.glsl)
+
+add_custom_command(
+    TARGET demo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.png
+)
 
 target_compile_options(
     ImmediateModeVulkan PUBLIC

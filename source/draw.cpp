@@ -47,6 +47,13 @@ namespace imv {
         uint32_t image_index;
     };
 
+    struct image_file {
+        unique_image image;
+        unique_allocation allocation;
+        unique_image_view view;
+        filesystem::file_time_type last_update;
+    };
+
     struct shader_module_file {
         unique_shader_module shader_module;
         filesystem::file_time_type last_update;
@@ -93,6 +100,9 @@ namespace imv {
         unordered_map<
             string, shader_module_file, string_hash, equal_to<>
         > shader_cache;
+        unordered_map<
+            string, image_file, string_hash, equal_to<>
+        > image_cache;
     };
 
     struct file_deleter {
@@ -628,6 +638,150 @@ namespace imv {
             }
         }
 
+        for (const auto& image_file : info.images) {
+            auto file_name = image_file.file_name;
+            auto insert = r.image_cache.emplace(file_name, imv::image_file{});
+            auto last_write = filesystem::last_write_time(file_name);
+            auto entry = insert.first;
+            if (insert.second || last_write > entry->second.last_update) {
+                entry->second.last_update = last_write;
+                
+                unique_image image;
+                unique_allocation allocation;
+                unique_image_view view;
+
+                // TODO: load image from file
+                auto result = VK_SUCCESS;
+                
+                unsigned width = 8, height = 8;
+                VkImageCreateInfo create_info = {
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                    .imageType = VK_IMAGE_TYPE_2D,
+                    .format = VK_FORMAT_R8G8B8A8_SRGB,
+                    .extent = {
+                        .width = width,
+                        .height = height,
+                        .depth = 1,
+                    },
+                    .mipLevels = 1,
+                    .arrayLayers = 1,
+                    .samples = VK_SAMPLE_COUNT_1_BIT,
+                    .tiling = VK_IMAGE_TILING_LINEAR,
+                    .usage =
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | 
+                        VK_IMAGE_USAGE_SAMPLED_BIT,
+                    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                };
+                VmaAllocationCreateInfo allocation_create_info {
+                    .flags = 
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                    .usage = VMA_MEMORY_USAGE_AUTO,
+                };
+                check(vmaCreateImage(
+                    r.allocator.get(), &create_info, &allocation_create_info,
+                    out_ptr(image), 
+                    out_ptr(allocation), nullptr
+                ));
+
+                auto size = height * width * 4;
+                auto pixels = make_unique<uint8_t[]>(size);
+                fill(pixels.get(), pixels.get() + size, 255);
+                check(vmaCopyMemoryToAllocation(
+                    r.allocator.get(), pixels.get(), 
+                    allocation.get(), 0, sizeof(pixels)
+                ));
+
+                {
+                    // transition image from undefined to general layout
+                    VkCommandBuffer command_buffer;
+
+                    VkCommandBufferAllocateInfo allocate_info = {
+                        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                        .commandPool = r.command_pool.get(),
+                        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                        .commandBufferCount = 1,
+                    };
+                    check(vkAllocateCommandBuffers(
+                        r.device.get(), &allocate_info, &command_buffer
+                    ));
+
+                    VkCommandBufferBeginInfo begin_info = {
+                        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                    };
+
+                    check(vkBeginCommandBuffer(command_buffer, &begin_info));
+
+                    VkImageMemoryBarrier image_memory_barrier = {
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image = image.get(),
+                        .subresourceRange = {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                    };
+
+                    vkCmdPipelineBarrier(
+                        command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, 
+                        nullptr, 1,
+                        &image_memory_barrier
+                    );
+
+                    check(vkEndCommandBuffer(command_buffer));
+
+                    VkSubmitInfo submit_info = {
+                        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                        .commandBufferCount = 1,
+                        .pCommandBuffers = &command_buffer,
+                    };
+                    check(vkQueueSubmit(
+                        r.graphics_queue, 1, &submit_info, VK_NULL_HANDLE
+                    ));
+                    // TODO: use fence instead
+                    check(vkQueueWaitIdle(r.graphics_queue));
+                    // TODO: use destructor instead
+                    vkFreeCommandBuffers(
+                        r.device.get(), r.command_pool.get(), 1, &command_buffer
+                    );
+                }
+
+                {
+                    VkImageViewCreateInfo create_info = {
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                        .image = image.get(),
+                        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                        .format = VK_FORMAT_R8G8B8A8_SRGB,
+                        .subresourceRange = {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                    };
+                    check(vkCreateImageView(
+                        r.device.get(), &create_info, nullptr, 
+                        out_ptr(view)
+                    ));
+                }
+
+                if (result == VK_SUCCESS) {
+                    entry->second.image = std::move(image);
+                    entry->second.allocation = std::move(allocation);
+                    entry->second.view = std::move(view);
+                }
+            }
+        }
+
         if (recording) {
             image.samplers.push_back({});
 
@@ -656,7 +810,7 @@ namespace imv {
             r.pipeline_shader_stages.resize(info.stages.size());
 
             for (auto i = 0u; i < info.stages.size(); i++) {
-                const char* fileName = (info.stages.begin() + i)->codeFileName;
+                const char* fileName = (info.stages.begin() + i)->code_file_name;
                 string_view fileNameView = fileName;
                 auto insert = r.shader_cache.insert({string(fileNameView), {}});
                 auto last_write = filesystem::last_write_time(fileNameView);
@@ -829,19 +983,19 @@ namespace imv {
                 &image.descriptor_sets.back(), 0, nullptr
             );
 
-            vkCmdDraw(image.command_buffer, info.vertexCount, 1, 0, 0);
+            vkCmdDraw(image.command_buffer, info.vertex_count, 1, 0, 0);
         }
 
         // TODO: store offset in uniform_buffer?
         check(vmaCopyMemoryToAllocation(
-            r.allocator.get(), info.copyMemoryToUniformBufferSrcHostPointer, 
+            r.allocator.get(), info.uniform_source_pointer, 
             image.uniform_allocation.get(), 
-            image.uniform_buffer_size, info.copyMemoryToUniformBufferSize
+            image.uniform_buffer_size, info.uniform_source_size
         ));
 
         if (recording) {
             image.uniform_buffer_size += 
-                aligned(info.copyMemoryToUniformBufferSize, r.offset_alignment);
+                aligned(info.uniform_source_size, r.offset_alignment);
         }
 
         return true;

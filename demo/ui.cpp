@@ -19,16 +19,32 @@ void ui::render() {
         imv::draw({
             .stages = {
                 { 
-                    .codeFileName = "demo/video_vertex.glsl.spv",
+                    .code_file_name = "demo/video_vertex.glsl.spv",
                     .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
                 }, { 
-                    .codeFileName = "demo/video_fragment.glsl.spv",
+                    .code_file_name = "demo/video_fragment.glsl.spv",
                     .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
                 }, 
             },
-            .copyMemoryToUniformBufferSrcHostPointer = &uniforms,
-            .copyMemoryToUniformBufferSize = sizeof(uniforms),
-            .vertexCount = 6,
+            .images = {
+                {
+                    .file_name = "demo/placeholder.png",
+                    .sampler_info = {
+                        .magFilter = VK_FILTER_LINEAR,
+                        .minFilter = VK_FILTER_LINEAR,
+                        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                        .anisotropyEnable = VK_FALSE,
+                        .minLod = 0.0,
+                        .maxLod = VK_LOD_CLAMP_NONE,
+                    }
+                }
+            },
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = 6,
         });
         
         uniforms.time += 3.14f / 50;
