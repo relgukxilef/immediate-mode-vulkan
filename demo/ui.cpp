@@ -28,7 +28,7 @@ void ui::render() {
             },
             .images = {
                 {
-                    .file_name = "demo/placeholder.png",
+                    .file_name = "demo/placeholder.ktx",
                     .sampler_info = {
                         .magFilter = VK_FILTER_LINEAR,
                         .minFilter = VK_FILTER_LINEAR,

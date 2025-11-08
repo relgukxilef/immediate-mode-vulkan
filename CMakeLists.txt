@@ -1,9 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 
-project(ImmediateModeVulkan LANGUAGES CXX)
+project(ImmediateModeVulkan LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -41,6 +39,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(VulkanMemoryAllocator)
 
+set(KTX_FEATURE_TESTS OFF)
+set(KTX_FEATURE_TOOLS ON)
+FetchContent_Declare(
+    KTX
+    GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
+    GIT_TAG v4.4.2
+)
+FetchContent_MakeAvailable(KTX)
+
 find_package(Vulkan 1.1)
 
 add_library(
@@ -56,18 +63,22 @@ add_library(
 target_link_libraries(
     ImmediateModeVulkan
     gdi32 user32 kernel32 Vulkan::Vulkan glfw Vulkan::Headers glm
-    VulkanMemoryAllocator
+    VulkanMemoryAllocator ktx_read
 )
 
 target_include_directories(
     ImmediateModeVulkan PUBLIC include
 )
 
+target_compile_features(ImmediateModeVulkan PRIVATE cxx_std_23)
+
 add_executable(
     demo
     demo/main.cpp
     demo/ui.cpp demo/ui.h
 )
+
+target_compile_features(demo PRIVATE cxx_std_23)
 
 target_link_libraries(
     demo PRIVATE ImmediateModeVulkan
@@ -104,10 +115,15 @@ add_shader(demo demo/video_vertex.glsl)
 add_shader(demo demo/video_fragment.glsl)
 
 add_custom_command(
-    TARGET demo POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
+    COMMAND 
+        toktx --genmipmap --encode uastc --uastc_quality 4
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
         ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.png
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
+)
+target_sources(
+    demo PRIVATE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
 )
 
 target_compile_options(

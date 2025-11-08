@@ -2,6 +2,8 @@
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
 
+#include <ktx.h>
+
 #include <vector>
 #include <unordered_map>
 #include <filesystem>
@@ -59,14 +61,8 @@ namespace imv {
         filesystem::file_time_type last_update;
     };
 
-    struct string_hash {
+    struct string_hash : std::hash<string_view> {
         typedef void is_transparent;
-        size_t operator()(const string& s) const {
-            return operator()(string_view(s));
-        }
-        size_t operator()(const string_view& s) const {
-            return hash<string_view>()(s);
-        }
     };
 
     struct renderer_data {
