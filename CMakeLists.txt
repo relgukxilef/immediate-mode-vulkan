@@ -82,7 +82,6 @@ target_compile_features(ImmediateModeVulkan PRIVATE cxx_std_23)
 add_executable(
     demo
     demo/main.cpp
-    demo/ui.cpp demo/ui.h
 )
 
 target_compile_features(demo PRIVATE cxx_std_23)
