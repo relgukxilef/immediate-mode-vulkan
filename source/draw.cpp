@@ -1,9 +1,11 @@
 #include <immediate_mode_vulkan/draw.h>
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
+#include <immediate_mode_vulkan/resources/ktx_resources.h>
 
 #include <ktx.h>
 
+#include <memory>
 #include <vector>
 #include <unordered_map>
 #include <filesystem>
@@ -50,8 +52,8 @@ namespace imv {
     };
 
     struct image_file {
-        unique_image image;
-        unique_allocation allocation;
+        unique_ktx_vulkan_texture vulkan_texture;
+        VkImage image;
         unique_image_view view;
         filesystem::file_time_type last_update;
     };
@@ -99,6 +101,8 @@ namespace imv {
         unordered_map<
             string, image_file, string_hash, equal_to<>
         > image_cache;
+
+        unique_ktx_device ktx_device;
     };
 
     struct file_deleter {
@@ -339,6 +343,12 @@ namespace imv {
                 out_ptr(r.swapchain_image_ready_semaphore)
             ));
         }
+
+        r.ktx_device.reset(new ktxVulkanDeviceInfo);
+        check(ktxVulkanDeviceInfo_Construct(
+            r.ktx_device.get(), physical_device, r.device.get(), 
+            r.graphics_queue, r.command_pool.get(), nullptr
+        ));
     }
 
     renderer::~renderer() {
@@ -642,120 +652,36 @@ namespace imv {
             if (insert.second || last_write > entry->second.last_update) {
                 entry->second.last_update = last_write;
                 
-                unique_image image;
+                unique_ktx_texture2 texture;
+                unique_ktx_vulkan_texture vulkan_texture{new ktxVulkanTexture};
+                VkImage image;
                 unique_allocation allocation;
                 unique_image_view view;
 
-                // TODO: load image from file
                 auto result = VK_SUCCESS;
-                
-                unsigned width = 8, height = 8;
-                VkImageCreateInfo create_info = {
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-                    .imageType = VK_IMAGE_TYPE_2D,
-                    .format = VK_FORMAT_R8G8B8A8_SRGB,
-                    .extent = {
-                        .width = width,
-                        .height = height,
-                        .depth = 1,
-                    },
-                    .mipLevels = 1,
-                    .arrayLayers = 1,
-                    .samples = VK_SAMPLE_COUNT_1_BIT,
-                    .tiling = VK_IMAGE_TILING_LINEAR,
-                    .usage =
-                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | 
-                        VK_IMAGE_USAGE_SAMPLED_BIT,
-                    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                };
-                VmaAllocationCreateInfo allocation_create_info {
-                    .flags = 
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-                    .usage = VMA_MEMORY_USAGE_AUTO,
-                };
-                check(vmaCreateImage(
-                    r.allocator.get(), &create_info, &allocation_create_info,
-                    out_ptr(image), 
-                    out_ptr(allocation), nullptr
+
+                check(ktxTexture2_CreateFromNamedFile(
+                    entry->first.c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, 
+                    out_ptr(texture)
+                ));
+                // TODO: check VkPhysicalDeviceProperties for supported formats
+                check(ktxTexture2_TranscodeBasis(
+                    texture.get(), KTX_TTF_BC7_RGBA, 0
+                ));
+                check(ktxTexture2_VkUploadEx(
+                    texture.get(), r.ktx_device.get(), vulkan_texture.get(), 
+                    VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT, 
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                 ));
 
-                auto size = height * width * 4;
-                auto pixels = make_unique<uint8_t[]>(size);
-                fill(pixels.get(), pixels.get() + size, 255);
-                check(vmaCopyMemoryToAllocation(
-                    r.allocator.get(), pixels.get(), 
-                    allocation.get(), 0, sizeof(pixels)
-                ));
-
-                {
-                    // transition image from undefined to general layout
-                    VkCommandBuffer command_buffer;
-
-                    VkCommandBufferAllocateInfo allocate_info = {
-                        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                        .commandPool = r.command_pool.get(),
-                        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                        .commandBufferCount = 1,
-                    };
-                    check(vkAllocateCommandBuffers(
-                        r.device.get(), &allocate_info, &command_buffer
-                    ));
-
-                    VkCommandBufferBeginInfo begin_info = {
-                        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-                    };
-
-                    check(vkBeginCommandBuffer(command_buffer, &begin_info));
-
-                    VkImageMemoryBarrier image_memory_barrier = {
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image = image.get(),
-                        .subresourceRange = {
-                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                            .baseMipLevel = 0,
-                            .levelCount = 1,
-                            .baseArrayLayer = 0,
-                            .layerCount = 1,
-                        },
-                    };
-
-                    vkCmdPipelineBarrier(
-                        command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, 
-                        nullptr, 1,
-                        &image_memory_barrier
-                    );
-
-                    check(vkEndCommandBuffer(command_buffer));
-
-                    VkSubmitInfo submit_info = {
-                        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                        .commandBufferCount = 1,
-                        .pCommandBuffers = &command_buffer,
-                    };
-                    check(vkQueueSubmit(
-                        r.graphics_queue, 1, &submit_info, VK_NULL_HANDLE
-                    ));
-                    // TODO: use fence instead
-                    check(vkQueueWaitIdle(r.graphics_queue));
-                    // TODO: use destructor instead
-                    vkFreeCommandBuffers(
-                        r.device.get(), r.command_pool.get(), 1, &command_buffer
-                    );
-                }
+                image = vulkan_texture->image;
 
                 {
                     VkImageViewCreateInfo create_info = {
                         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                        .image = image.get(),
+                        .image = image,
                         .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                        .format = VK_FORMAT_R8G8B8A8_SRGB,
+                        .format = vulkan_texture->imageFormat,
                         .subresourceRange = {
                             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                             .baseMipLevel = 0,
@@ -771,8 +697,8 @@ namespace imv {
                 }
 
                 if (result == VK_SUCCESS) {
-                    entry->second.image = std::move(image);
-                    entry->second.allocation = std::move(allocation);
+                    entry->second.vulkan_texture = std::move(vulkan_texture);
+                    entry->second.image = image;
                     entry->second.view = std::move(view);
                 }
             }
