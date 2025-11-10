@@ -41,6 +41,7 @@ FetchContent_MakeAvailable(VulkanMemoryAllocator)
 
 set(KTX_FEATURE_TESTS OFF)
 set(KTX_FEATURE_TOOLS ON)
+set(KTX_FEATURE_VK_UPLOAD ON)
 FetchContent_Declare(
     KTX
     GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
@@ -58,6 +59,7 @@ add_library(
     include/immediate_mode_vulkan/resources/vulkan_resources.h
     source/resources/vulkan_memory_allocator_resource.cpp
     include/immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h
+    include/immediate_mode_vulkan/resources/ktx_resources.h
 )
 
 target_link_libraries(
@@ -117,21 +119,13 @@ add_shader(demo demo/video_fragment.glsl)
 add_custom_command(
     OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
     COMMAND 
-        toktx --genmipmap --encode uastc --uastc_quality 4
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
+        ktx create --format R8G8B8A8_SRGB --encode uastc --generate-mipmap
         ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
 )
 target_sources(
     demo PRIVATE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
 )
 
-target_compile_options(
-    ImmediateModeVulkan PUBLIC
-    -Wall
-    $<$<CONFIG:Debug>:-g -O0 -D_FORTIFY_SOURCE=2 /fsanitize=address>
-)
-target_link_options(
-    ImmediateModeVulkan PUBLIC
-    $<$<CONFIG:Debug>:-g -O0 -D_FORTIFY_SOURCE=2>
-)
+#set(CMAKE_CXX_FLAGS_DEBUG -fsanitize=address)
