@@ -19,10 +19,10 @@ void ui::render() {
         imv::draw({
             .stages = {
                 { 
-                    .code_file_name = "demo/video_vertex.glsl.spv",
+                    .code_file_name = "demo/vertex.glsl.spv",
                     .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
                 }, { 
-                    .code_file_name = "demo/video_fragment.glsl.spv",
+                    .code_file_name = "demo/fragment.glsl.spv",
                     .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
                 }, 
             },
@@ -44,10 +44,10 @@ void ui::render() {
             },
             .uniform_source_pointer = &uniforms,
             .uniform_source_size = sizeof(uniforms),
-            .vertex_count = 6,
+            .vertex_count = 4,
         });
         
-        uniforms.time += 3.14f / 50;
+        uniforms.time += 0.5f;
     }
 
     imv::submit();
