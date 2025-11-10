@@ -3,12 +3,12 @@
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
 #include <immediate_mode_vulkan/resources/ktx_resources.h>
 
-#include <ktx.h>
-
 #include <memory>
 #include <vector>
 #include <unordered_map>
 #include <filesystem>
+
+#include <ktx.h>
 
 using namespace std;
 
@@ -87,22 +87,23 @@ namespace imv {
         
         unique_semaphore swapchain_image_ready_semaphore;
 
-        view view;
-
         uint32_t graphics_queue_family = ~0u, present_queue_family = ~0u;
         VkSurfaceFormatKHR surface_format;
         VkPhysicalDeviceMemoryProperties memory_properties;
-        
+
         vector<VkPipelineShaderStageCreateInfo> pipeline_shader_stages;
 
         unordered_map<
             string, shader_module_file, string_hash, equal_to<>
         > shader_cache;
+
+        unique_ktx_device ktx_device;
+        
         unordered_map<
             string, image_file, string_hash, equal_to<>
         > image_cache;
 
-        unique_ktx_device ktx_device;
+        view view;
     };
 
     struct file_deleter {
@@ -593,6 +594,12 @@ namespace imv {
                         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                         .descriptorCount = 1,
                         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                    }, {
+                        .binding = 1,
+                        .descriptorType = 
+                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        .descriptorCount = 1,
+                        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
                     },
                 };
                 VkDescriptorSetLayoutCreateInfo create_info = {
@@ -643,6 +650,9 @@ namespace imv {
                 ));
             }
         }
+
+        VkImage texture_image;
+        VkImageView texture_view;
 
         for (const auto& image_file : info.images) {
             auto file_name = image_file.file_name;
@@ -702,6 +712,9 @@ namespace imv {
                     entry->second.view = std::move(view);
                 }
             }
+
+            texture_image = entry->second.image;
+            texture_view = entry->second.view.get();
         }
 
         if (recording) {
@@ -843,6 +856,9 @@ namespace imv {
                 {
                     .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .descriptorCount = 1,
+                }, {
+                    .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1,
                 }, 
             };
             VkDescriptorPoolCreateInfo create_info = {
@@ -871,6 +887,14 @@ namespace imv {
                 r.device.get(), &descriptor_set_allocate_info, 
                 &image.descriptor_sets.back()
             ));
+            // TODO: support multiple images in one draw
+            VkDescriptorImageInfo descriptor_image_info[] = {
+                {
+                    .sampler = image.samplers.back().get(),
+                    .imageView = texture_view,
+                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                },
+            };
             VkDescriptorBufferInfo descriptor_buffer_info[] = {
                 {
                     .buffer = image.uniform_buffer.get(),
@@ -887,7 +911,15 @@ namespace imv {
                     .descriptorCount = uint32_t(size(descriptor_buffer_info)),
                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .pBufferInfo = descriptor_buffer_info,
-                }
+                }, {
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = image.descriptor_sets.back(),
+                    .dstBinding = 1,
+                    .dstArrayElement = 0,
+                    .descriptorCount = uint32_t(size(descriptor_image_info)),
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = descriptor_image_info,
+                },
             };
             vkUpdateDescriptorSets(
                 r.device.get(), 

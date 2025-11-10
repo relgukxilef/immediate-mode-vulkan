@@ -7,6 +7,11 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+if (CMAKE_BUILD_TYPE EQUAL "Debug")
+    add_compile_options(/fsanitize=address)
+    add_link_options(/fsanitize=address)
+endif()
+
 include(FetchContent)
 
 FetchContent_Declare(
@@ -113,8 +118,8 @@ function(add_shader TARGET SHADER)
     )
 endfunction(add_shader)
 
-add_shader(demo demo/video_vertex.glsl)
-add_shader(demo demo/video_fragment.glsl)
+add_shader(demo demo/vertex.glsl)
+add_shader(demo demo/fragment.glsl)
 
 add_custom_command(
     OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
@@ -122,10 +127,9 @@ add_custom_command(
         ktx create --format R8G8B8A8_SRGB --encode uastc --generate-mipmap
         ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png ktx
+    COMMENT "Compressing image"
 )
 target_sources(
     demo PRIVATE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
 )
-
-#set(CMAKE_CXX_FLAGS_DEBUG -fsanitize=address)
