@@ -17,8 +17,6 @@
 using std::unique_ptr;
 using std::out_ptr;
 
-VkSampleCountFlagBits max_sample_count;
-
 void glfw_check(int code) {
     if (code == GLFW_TRUE) {
         return;
@@ -56,7 +54,7 @@ int main() {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "Vulkan Experiments",
         .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
-        .pEngineName = "No Engine",
+        .pEngineName = "Immediate Mode Vulkan",
         .engineVersion = VK_MAKE_VERSION(1, 0, 0),
         .apiVersion = VK_API_VERSION_1_0
     };
@@ -105,51 +103,7 @@ int main() {
         instance.get(), window.get(), nullptr, out_ptr(surface)
     ));
 
-    // look for available devices
-    VkPhysicalDevice physical_device;
-
-    uint32_t device_count = 0;
-    imv::check(vkEnumeratePhysicalDevices(
-        instance.get(), &device_count, nullptr
-    ));
-    if (device_count == 0) {
-        throw std::runtime_error("no Vulkan capable GPU found");
-    }
-    {
-        auto devices = std::make_unique<VkPhysicalDevice[]>(device_count);
-        imv::check(vkEnumeratePhysicalDevices(
-            instance.get(), &device_count, devices.get()
-        ));
-        // TODO: check for VK_KHR_swapchain support
-        physical_device = devices[0]; // just pick the first one for now
-    }
-
-    // get properties of physical device
-    max_sample_count = VK_SAMPLE_COUNT_1_BIT;
-    {
-        VkPhysicalDeviceProperties physical_device_properties;
-        vkGetPhysicalDeviceProperties(
-            physical_device, &physical_device_properties
-        );
-
-        VkSampleCountFlags sample_count_falgs =
-            physical_device_properties.limits.framebufferColorSampleCounts &
-            physical_device_properties.limits.framebufferDepthSampleCounts &
-            physical_device_properties.limits.framebufferStencilSampleCounts;
-
-        for (auto bit : {
-            VK_SAMPLE_COUNT_64_BIT, VK_SAMPLE_COUNT_32_BIT,
-            VK_SAMPLE_COUNT_16_BIT, VK_SAMPLE_COUNT_8_BIT,
-            VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_2_BIT,
-        }) {
-            if (sample_count_falgs & bit) {
-                max_sample_count = bit;
-                break;
-            }
-        }
-    }
-    
-    imv::renderer r(instance.get(), physical_device, surface.get());
+    imv::renderer r(instance.get(), surface.get());
     imv::global_renderer = &r;
     
     while (!glfwWindowShouldClose(window.get())) {

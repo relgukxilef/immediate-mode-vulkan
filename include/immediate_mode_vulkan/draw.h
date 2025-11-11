@@ -7,8 +7,7 @@
 namespace imv {
     struct renderer {
         renderer(
-            VkInstance instance, VkPhysicalDevice physical_device, 
-            VkSurfaceKHR surface
+            VkInstance instance, VkSurfaceKHR surface
         );
         ~renderer();
 

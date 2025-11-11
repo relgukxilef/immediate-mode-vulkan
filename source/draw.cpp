@@ -125,9 +125,27 @@ namespace imv {
     }
 
     renderer::renderer(
-        VkInstance instance, VkPhysicalDevice physical_device, 
-        VkSurfaceKHR surface
-    ) {
+        VkInstance instance, VkSurfaceKHR surface
+    ) {        
+        // look for available devices
+        VkPhysicalDevice physical_device;
+
+        uint32_t device_count = 0;
+        imv::check(vkEnumeratePhysicalDevices(
+            instance, &device_count, nullptr
+        ));
+        if (device_count == 0) {
+            throw std::runtime_error("no Vulkan capable GPU found");
+        }
+        {
+            auto devices = std::make_unique<VkPhysicalDevice[]>(device_count);
+            imv::check(vkEnumeratePhysicalDevices(
+                instance, &device_count, devices.get()
+            ));
+            // TODO: check for VK_KHR_swapchain support
+            physical_device = devices[0]; // just pick the first one for now
+        }
+
         d = make_unique<renderer_data>();
         d->physical_device = physical_device;
         d->surface = surface;
