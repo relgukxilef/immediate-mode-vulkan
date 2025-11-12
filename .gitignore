@@ -5,6 +5,9 @@
 !*.h
 !*.glsl
 !*.txt
+
+!*.png
+
 !.gitignore
 
 build

@@ -32,6 +32,10 @@ namespace imv {
         unique_framebuffer swapchain_framebuffer;
         unique_image_view swapchain_image_view;
 
+        vector<shared_ptr<unique_image>> images;
+        vector<shared_ptr<unique_device_memory>> image_memories;
+        vector<shared_ptr<unique_image_view>> image_views;
+
         unique_semaphore render_finished_semaphore;
         unique_fence render_finished_fence;
 
@@ -46,15 +50,15 @@ namespace imv {
         unique_swapchain swapchain;
         unique_descriptor_pool descriptor_pool; // TODO: could be in r
 
-        std::unique_ptr<VkImage[]> swapchain_images;
-        std::unique_ptr<image[]> images;
+        unique_ptr<VkImage[]> swapchain_images;
+        unique_ptr<image[]> images;
         uint32_t image_index;
     };
 
     struct image_file {
-        unique_ktx_vulkan_texture vulkan_texture;
-        VkImage image;
-        unique_image_view view;
+        shared_ptr<unique_image> image;
+        shared_ptr<unique_device_memory> device_memory;
+        shared_ptr<unique_image_view> view;
         filesystem::file_time_type last_update;
     };
 
@@ -554,6 +558,9 @@ namespace imv {
             vkResetCommandBuffer(image.command_buffer, 0);
             image.pipelines.clear();
             image.samplers.clear();
+            image.images.clear();
+            image.image_memories.clear();
+            image.image_views.clear();
             if (!image.descriptor_sets.empty())
                 vkFreeDescriptorSets(
                     r.device.get(), view.descriptor_pool.get(), 
@@ -681,35 +688,35 @@ namespace imv {
                 entry->second.last_update = last_write;
                 
                 unique_ktx_texture2 texture;
-                unique_ktx_vulkan_texture vulkan_texture{new ktxVulkanTexture};
-                VkImage image;
-                unique_allocation allocation;
+                unique_image vulkan_image;
+                unique_device_memory memory;
                 unique_image_view view;
+                
+                ktxVulkanTexture vulkan_texture;
 
-                auto result = VK_SUCCESS;
-
-                check(ktxTexture2_CreateFromNamedFile(
+                auto result = ktxTexture2_CreateFromNamedFile(
                     entry->first.c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, 
                     out_ptr(texture)
-                ));
+                );
                 // TODO: check VkPhysicalDeviceProperties for supported formats
-                check(ktxTexture2_TranscodeBasis(
-                    texture.get(), KTX_TTF_BC7_RGBA, 0
-                ));
-                check(ktxTexture2_VkUploadEx(
-                    texture.get(), r.ktx_device.get(), vulkan_texture.get(), 
-                    VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT, 
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                ));
+                if (result == VK_SUCCESS) {
+                    check(ktxTexture2_TranscodeBasis(
+                        texture.get(), KTX_TTF_BC7_RGBA, 0
+                    ));
+                    check(ktxTexture2_VkUploadEx(
+                        texture.get(), r.ktx_device.get(), &vulkan_texture, 
+                        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT, 
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    ));
 
-                image = vulkan_texture->image;
+                    vulkan_image.reset(vulkan_texture.image);
+                    memory.reset(vulkan_texture.deviceMemory);
 
-                {
                     VkImageViewCreateInfo create_info = {
                         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                        .image = image,
+                        .image = vulkan_image.get(),
                         .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                        .format = vulkan_texture->imageFormat,
+                        .format = vulkan_texture.imageFormat,
                         .subresourceRange = {
                             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                             .baseMipLevel = 0,
@@ -722,17 +729,22 @@ namespace imv {
                         r.device.get(), &create_info, nullptr, 
                         out_ptr(view)
                     ));
-                }
-
-                if (result == VK_SUCCESS) {
-                    entry->second.vulkan_texture = std::move(vulkan_texture);
-                    entry->second.image = image;
-                    entry->second.view = std::move(view);
+                    
+                    entry->second.image = 
+                        make_shared<unique_image>(std::move(vulkan_image));
+                    entry->second.device_memory = 
+                        make_shared<unique_device_memory>(std::move(memory));
+                    entry->second.view = 
+                        make_shared<unique_image_view>(std::move(view));
                 }
             }
 
-            texture_image = entry->second.image;
-            texture_view = entry->second.view.get();
+            image.images.push_back(entry->second.image);
+            image.image_memories.push_back(entry->second.device_memory);
+            image.image_views.push_back(entry->second.view);
+
+            texture_image = entry->second.image->get();
+            texture_view = entry->second.view->get();
         }
 
         if (recording) {
@@ -808,10 +820,14 @@ namespace imv {
             };
             VkViewport viewport = {
                 .x = 0.0f, .y = 0.0f,
-                .width = 1280.0f, .height = 720.0f,
+                .width = float(view.extent.width), 
+                .height = float(view.extent.height),
                 .minDepth = 0.0f, .maxDepth = 1.0f,
             };
-            VkRect2D scissor = {.offset = {0, 0}, .extent = {1280, 720},};
+            VkRect2D scissor = {
+                .offset = {0, 0}, 
+                .extent = {view.extent.width, view.extent.height},
+            };
             VkPipelineViewportStateCreateInfo pipeline_viewport_state = {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
                 .viewportCount = 1,

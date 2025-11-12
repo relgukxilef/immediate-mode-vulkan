@@ -126,8 +126,11 @@ add_custom_command(
         ktx create --format R8G8B8A8_SRGB --encode uastc --generate-mipmap
         ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
+    COMMAND # Unfortunately, ktx doesn't update the modification date at the end
+        ${CMAKE_COMMAND} -E touch
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png ktx
-    COMMENT "Compressing image"
+    COMMENT "Compress image"
 )
 target_sources(
     demo PRIVATE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx

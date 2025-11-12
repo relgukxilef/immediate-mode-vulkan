@@ -25,17 +25,8 @@ namespace imv {
         }
     };
 
-    struct ktx_vulkan_texture_deleter {
-        typedef ktxVulkanTexture* pointer;
-        void operator()(ktxVulkanTexture* texture) {
-            ktxVulkanTexture_Destruct(texture, current_device, nullptr);
-        }
-    };
-
     typedef std::unique_ptr<ktxVulkanDeviceInfo, ktx_device_deleter> 
         unique_ktx_device;
     typedef std::unique_ptr<ktxTexture2, ktx_texture2_deleter> 
         unique_ktx_texture2;
-    typedef std::unique_ptr<ktxVulkanTexture, ktx_vulkan_texture_deleter>
-        unique_ktx_vulkan_texture;
 }
