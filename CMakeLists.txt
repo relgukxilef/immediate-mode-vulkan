@@ -54,6 +54,13 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(KTX)
 
+FetchContent_Declare(
+    basisu
+    GIT_REPOSITORY https://github.com/BinomialLLC/basis_universal.git
+    GIT_TAG v1_50_0_2
+)
+FetchContent_MakeAvailable(basisu)
+
 find_package(Vulkan 1.1)
 
 add_library(
@@ -123,9 +130,9 @@ add_shader(demo demo/fragment.glsl)
 add_custom_command(
     OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
     COMMAND 
-        ktx create --format R8G8B8A8_SRGB --encode uastc --generate-mipmap
+        basisu -uastc -level 5
         ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
+        -output_file ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
     COMMAND # Unfortunately, ktx doesn't update the modification date at the end
         ${CMAKE_COMMAND} -E touch
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
