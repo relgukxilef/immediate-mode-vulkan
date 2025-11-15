@@ -1,3 +1,4 @@
+#include "vulkan/vulkan_core.h"
 #include <cstdint>
 #include <span>
 #include <type_traits>
@@ -34,17 +35,23 @@ namespace imv {
         }
     }
 
-    template<class C>
-    void visit(auto&& visitor, auto&& object, tag_t<std::vector<C>>) {
-        visit(visitor, std::span<const C>(object));
-    }
-
-    void visit_array(auto&& visitor, auto* pointer, size_t size) {
-        visit(visitor, std::span<decltype(*pointer)>(pointer, size));
+    template<class T>
+    void visit_array(auto&& visitor, T* pointer, size_t size) {
+        visit(visitor, std::span<T>(pointer, size));
     }
     
+
     void visit(auto&& visitor, auto&& object, tag_t<VkDescriptorPoolSize>) {
         visit(visitor, object.type);
         visit(visitor, object.descriptorCount);
+    }
+    void visit(
+        auto&& visitor, auto&& object, tag_t<VkDescriptorPoolCreateInfo>
+    ) {
+        visit(visitor, object.sType);
+        //visit(visitor, object.pNext);
+        visit(visitor, object.flags);
+        visit(visitor, object.maxSets);
+        visit_array(visitor, object.pPoolSizes, object.poolSizeCount);
     }
 }
