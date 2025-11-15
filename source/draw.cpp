@@ -127,6 +127,11 @@ namespace imv {
         
         unordered_map<
             vector<uint64_t>,
+            unique_descriptor_set_layout, vector_hash, equal_to<>
+        > descriptor_set_layouts;
+
+        unordered_map<
+            vector<uint64_t>,
             unique_descriptor_pool, vector_hash, equal_to<>
         > descriptor_pools;
 
@@ -906,18 +911,18 @@ namespace imv {
                     .descriptorCount = 1,
                 }, 
             };
+            VkDescriptorPoolCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT ,
+                .maxSets = view.image_count * max_draw_count,
+                .poolSizeCount = uint32_t(std::size(pool_size)),
+                .pPoolSizes = pool_size.data(),
+            };
 
             vector<uint64_t> key;
-            visit(key, pool_size);
+            visit(key, create_info);
             auto insert = r.descriptor_pools.insert({key, {}});
             if (insert.second) {
-                VkDescriptorPoolCreateInfo create_info = {
-                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                    .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT ,
-                    .maxSets = view.image_count * max_draw_count,
-                    .poolSizeCount = uint32_t(std::size(pool_size)),
-                    .pPoolSizes = pool_size.data(),
-                };
                 check(vkCreateDescriptorPool(
                     r.device.get(), &create_info, nullptr, 
                     out_ptr(insert.first->second))
