@@ -2,6 +2,8 @@
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
 #include <immediate_mode_vulkan/resources/ktx_resources.h>
+#include "serialize.h"
+#include "vulkan/vulkan_core.h"
 
 #include <memory>
 #include <vector>
@@ -32,15 +34,15 @@ namespace imv {
         unique_framebuffer swapchain_framebuffer;
         unique_image_view swapchain_image_view;
 
-        vector<shared_ptr<unique_image>> images;
         vector<shared_ptr<unique_device_memory>> image_memories;
+        vector<shared_ptr<unique_image>> images;
         vector<shared_ptr<unique_image_view>> image_views;
+
+        vector<unique_descriptor_set> descriptor_sets;
+        VkCommandBuffer command_buffer;
 
         unique_semaphore render_finished_semaphore;
         unique_fence render_finished_fence;
-
-        vector<VkDescriptorSet> descriptor_sets;
-        VkCommandBuffer command_buffer;
     };
 
     struct view {
@@ -48,7 +50,6 @@ namespace imv {
         VkSurfaceCapabilitiesKHR capabilities;
         VkExtent2D extent;
         unique_swapchain swapchain;
-        unique_descriptor_pool descriptor_pool; // TODO: could be in r
 
         unique_ptr<VkImage[]> swapchain_images;
         unique_ptr<image[]> images;
@@ -56,8 +57,8 @@ namespace imv {
     };
 
     struct image_file {
-        shared_ptr<unique_image> image;
         shared_ptr<unique_device_memory> device_memory;
+        shared_ptr<unique_image> image;
         shared_ptr<unique_image_view> view;
         filesystem::file_time_type last_update;
     };
@@ -83,6 +84,7 @@ namespace imv {
 
         unique_allocator allocator;
 
+        // TODO: support multiple layouts
         unique_descriptor_set_layout descriptor_set_layout;
 
         unique_render_pass render_pass;
@@ -106,6 +108,11 @@ namespace imv {
         unordered_map<
             string, image_file, string_hash, equal_to<>
         > image_cache;
+        
+        unordered_map<
+            vector<VkDescriptorPoolSize>,
+            unique_descriptor_pool, hasher, equal_to<>
+        > descriptor_pools;
 
         view view;
     };
@@ -552,53 +559,44 @@ namespace imv {
             r.device.get(), 1, &fence
         ));
 
-        bool recording = !image.command_buffer;
-        recording = true;
-        if (recording) {
-            vkResetCommandBuffer(image.command_buffer, 0);
-            image.pipelines.clear();
-            image.samplers.clear();
-            image.images.clear();
-            image.image_memories.clear();
-            image.image_views.clear();
-            if (!image.descriptor_sets.empty())
-                vkFreeDescriptorSets(
-                    r.device.get(), view.descriptor_pool.get(), 
-                    image.descriptor_sets.size(), 
-                    image.descriptor_sets.data()
-                );
-            image.descriptor_sets.clear();
-            image.uniform_buffer_size = 0;
+        vkResetCommandBuffer(image.command_buffer, 0);
+        image.pipelines.clear();
+        image.samplers.clear();
+        image.images.clear();
+        image.image_memories.clear();
+        image.image_views.clear();
+        image.descriptor_sets.clear();
+        image.uniform_buffer_size = 0;
 
-            VkCommandBufferBeginInfo begin_info = {
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            };
-            check(vkBeginCommandBuffer(
-                image.command_buffer, &begin_info
-            ));
-            
-            auto clear_values = {
-                VkClearValue{
-                    .color = {{0.0f, 0.0f, 0.0f, 1.0f}},
-                },
-            };
+        VkCommandBufferBeginInfo begin_info = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        check(vkBeginCommandBuffer(
+            image.command_buffer, &begin_info
+        ));
+        
+        auto clear_values = {
+            VkClearValue{
+                .color = {{0.0f, 0.0f, 0.0f, 1.0f}},
+            },
+        };
 
-            VkRenderPassBeginInfo render_pass_begin_info = {
-                .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                .renderPass = r.render_pass.get(),
-                .framebuffer = image.swapchain_framebuffer.get(),
-                .renderArea = {
-                    .offset = {0, 0}, .extent = view.extent,
-                },
-                .clearValueCount = static_cast<uint32_t>(clear_values.size()),
-                .pClearValues = clear_values.begin(),
-            };
+        VkRenderPassBeginInfo render_pass_begin_info = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = r.render_pass.get(),
+            .framebuffer = image.swapchain_framebuffer.get(),
+            .renderArea = {
+                .offset = {0, 0}, .extent = view.extent,
+            },
+            .clearValueCount = static_cast<uint32_t>(clear_values.size()),
+            .pClearValues = clear_values.begin(),
+        };
 
-            vkCmdBeginRenderPass(
-                image.command_buffer, &render_pass_begin_info,
-                VK_SUBPASS_CONTENTS_INLINE
-            );
-        }
+        vkCmdBeginRenderPass(
+            image.command_buffer, &render_pass_begin_info,
+            VK_SUBPASS_CONTENTS_INLINE
+        );
     }
 
     bool draw(const draw_info& info) {
@@ -606,7 +604,6 @@ namespace imv {
         auto& view = r.view;
         if (!view.images)
             return false;
-        bool recording = true; // TODO
         imv::image& image = view.images[view.image_index];
 
         VkDeviceSize uniform_size = 128;
@@ -747,146 +744,144 @@ namespace imv {
             texture_view = entry->second.view->get();
         }
 
-        if (recording) {
-            image.samplers.push_back({});
+        image.samplers.push_back({});
 
-            {
-                VkSamplerCreateInfo create_info = {
-                    .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                    .magFilter = VK_FILTER_LINEAR,
-                    .minFilter = VK_FILTER_LINEAR,
-                    .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                    .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    .anisotropyEnable = VK_FALSE,
-                    .minLod = 0.0,
-                    .maxLod = VK_LOD_CLAMP_NONE,
-                };
-                check(vkCreateSampler(
-                    r.device.get(), &create_info, nullptr, 
-                    out_ptr(image.samplers.back())
-                ));
-            }
-
-            image.pipelines.push_back({});
-            
-            // TODO: use VkPipelineCache
-            r.pipeline_shader_stages.resize(info.stages.size());
-
-            for (auto i = 0u; i < info.stages.size(); i++) {
-                const char* fileName = (info.stages.begin() + i)->code_file_name;
-                string_view fileNameView = fileName;
-                auto insert = r.shader_cache.insert({string(fileNameView), {}});
-                auto last_write = filesystem::last_write_time(fileNameView);
-                auto entry = insert.first;
-                if (insert.second || last_write > entry->second.last_update) {
-                    entry->second.last_update = last_write;
-                    auto code = read_file(fileName);
-                    VkShaderModuleCreateInfo create_info = {
-                        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-                        .codeSize = (size_t)(code.size()),
-                        .pCode = reinterpret_cast<uint32_t*>(code.data()),
-                    };
-                    unique_shader_module shader_module;
-                    auto result = vkCreateShaderModule(
-                        r.device.get(), &create_info, nullptr, 
-                        out_ptr(shader_module)
-                    );
-                    if (result == VK_SUCCESS) {
-                        entry->second.shader_module = std::move(shader_module);
-                    }
-                }
-                VkPipelineShaderStageCreateInfo create_info = 
-                    (info.stages.begin() + i)->info;
-                create_info.sType = 
-                    VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-                create_info.module = entry->second.shader_module.get();
-                if (create_info.pName == nullptr)
-                    create_info.pName = "main";
-                r.pipeline_shader_stages[i] = create_info;
-            }
-
-            VkPipelineVertexInputStateCreateInfo pipeline_vertex_input_state = {
-                .sType = 
-                    VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        {
+            VkSamplerCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                .magFilter = VK_FILTER_LINEAR,
+                .minFilter = VK_FILTER_LINEAR,
+                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .anisotropyEnable = VK_FALSE,
+                .minLod = 0.0,
+                .maxLod = VK_LOD_CLAMP_NONE,
             };
-            VkPipelineInputAssemblyStateCreateInfo 
-            pipeline_input_assembly_state = {
-                .sType =
-                    VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-                .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-                .primitiveRestartEnable = VK_FALSE,
-            };
-            VkViewport viewport = {
-                .x = 0.0f, .y = 0.0f,
-                .width = float(view.extent.width), 
-                .height = float(view.extent.height),
-                .minDepth = 0.0f, .maxDepth = 1.0f,
-            };
-            VkRect2D scissor = {
-                .offset = {0, 0}, 
-                .extent = {view.extent.width, view.extent.height},
-            };
-            VkPipelineViewportStateCreateInfo pipeline_viewport_state = {
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-                .viewportCount = 1,
-                .pViewports = &viewport,
-                .scissorCount = 1,
-                .pScissors = &scissor,
-            };
-            VkPipelineRasterizationStateCreateInfo 
-            pipeline_rasterization_state = {
-                .sType = 
-                    VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                .polygonMode = VK_POLYGON_MODE_FILL,
-                // required, even when not doing line rendering
-                .lineWidth = 1.0f, 
-            };
-            VkPipelineMultisampleStateCreateInfo pipeline_multisample_state = {
-                .sType = 
-                    VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-                .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-            };
-            auto pipeline_color_blend_attachment_states = {
-                VkPipelineColorBlendAttachmentState{
-                    .colorWriteMask =
-                        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-                },
-            };
-            VkPipelineColorBlendStateCreateInfo pipeline_color_blend_state = {
-                .sType = 
-                    VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-                .attachmentCount = static_cast<uint32_t>(
-                    pipeline_color_blend_attachment_states.size()
-                ),
-                .pAttachments = pipeline_color_blend_attachment_states.begin(),
-                .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
-            };
-            VkGraphicsPipelineCreateInfo create_info = {
-                .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-                .stageCount = uint32_t(r.pipeline_shader_stages.size()),
-                .pStages = r.pipeline_shader_stages.data(),
-                .pVertexInputState = &pipeline_vertex_input_state,
-                .pInputAssemblyState = &pipeline_input_assembly_state,
-                .pViewportState = &pipeline_viewport_state,
-                .pRasterizationState = &pipeline_rasterization_state,
-                .pMultisampleState = &pipeline_multisample_state,
-                .pColorBlendState = &pipeline_color_blend_state,
-                .layout = r.video_pipeline_layout.get(),
-                .renderPass = r.render_pass.get(),
-            };
-            check(vkCreateGraphicsPipelines(
-                r.device.get(), nullptr, 1, &create_info, nullptr,
-                out_ptr(image.pipelines.back())
+            check(vkCreateSampler(
+                r.device.get(), &create_info, nullptr, 
+                out_ptr(image.samplers.back())
             ));
         }
 
-        if (!view.descriptor_pool) {
+        image.pipelines.push_back({});
+        
+        // TODO: use VkPipelineCache
+        r.pipeline_shader_stages.resize(info.stages.size());
+
+        for (auto i = 0u; i < info.stages.size(); i++) {
+            const char* fileName = (info.stages.begin() + i)->code_file_name;
+            string_view fileNameView = fileName;
+            auto insert = r.shader_cache.insert({string(fileNameView), {}});
+            auto last_write = filesystem::last_write_time(fileNameView);
+            auto entry = insert.first;
+            if (insert.second || last_write > entry->second.last_update) {
+                entry->second.last_update = last_write;
+                auto code = read_file(fileName);
+                VkShaderModuleCreateInfo create_info = {
+                    .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+                    .codeSize = (size_t)(code.size()),
+                    .pCode = reinterpret_cast<uint32_t*>(code.data()),
+                };
+                unique_shader_module shader_module;
+                auto result = vkCreateShaderModule(
+                    r.device.get(), &create_info, nullptr, 
+                    out_ptr(shader_module)
+                );
+                if (result == VK_SUCCESS) {
+                    entry->second.shader_module = std::move(shader_module);
+                }
+            }
+            VkPipelineShaderStageCreateInfo create_info = 
+                (info.stages.begin() + i)->info;
+            create_info.sType = 
+                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            create_info.module = entry->second.shader_module.get();
+            if (create_info.pName == nullptr)
+                create_info.pName = "main";
+            r.pipeline_shader_stages[i] = create_info;
+        }
+
+        VkPipelineVertexInputStateCreateInfo pipeline_vertex_input_state = {
+            .sType = 
+                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        };
+        VkPipelineInputAssemblyStateCreateInfo 
+        pipeline_input_assembly_state = {
+            .sType =
+                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+            .primitiveRestartEnable = VK_FALSE,
+        };
+        VkViewport viewport = {
+            .x = 0.0f, .y = 0.0f,
+            .width = float(view.extent.width), 
+            .height = float(view.extent.height),
+            .minDepth = 0.0f, .maxDepth = 1.0f,
+        };
+        VkRect2D scissor = {
+            .offset = {0, 0}, 
+            .extent = {view.extent.width, view.extent.height},
+        };
+        VkPipelineViewportStateCreateInfo pipeline_viewport_state = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .pViewports = &viewport,
+            .scissorCount = 1,
+            .pScissors = &scissor,
+        };
+        VkPipelineRasterizationStateCreateInfo 
+        pipeline_rasterization_state = {
+            .sType = 
+                VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            // required, even when not doing line rendering
+            .lineWidth = 1.0f, 
+        };
+        VkPipelineMultisampleStateCreateInfo pipeline_multisample_state = {
+            .sType = 
+                VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        };
+        auto pipeline_color_blend_attachment_states = {
+            VkPipelineColorBlendAttachmentState{
+                .colorWriteMask =
+                    VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+            },
+        };
+        VkPipelineColorBlendStateCreateInfo pipeline_color_blend_state = {
+            .sType = 
+                VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .attachmentCount = static_cast<uint32_t>(
+                pipeline_color_blend_attachment_states.size()
+            ),
+            .pAttachments = pipeline_color_blend_attachment_states.begin(),
+            .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
+        };
+        VkGraphicsPipelineCreateInfo create_info = {
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .stageCount = uint32_t(r.pipeline_shader_stages.size()),
+            .pStages = r.pipeline_shader_stages.data(),
+            .pVertexInputState = &pipeline_vertex_input_state,
+            .pInputAssemblyState = &pipeline_input_assembly_state,
+            .pViewportState = &pipeline_viewport_state,
+            .pRasterizationState = &pipeline_rasterization_state,
+            .pMultisampleState = &pipeline_multisample_state,
+            .pColorBlendState = &pipeline_color_blend_state,
+            .layout = r.video_pipeline_layout.get(),
+            .renderPass = r.render_pass.get(),
+        };
+        check(vkCreateGraphicsPipelines(
+            r.device.get(), nullptr, 1, &create_info, nullptr,
+            out_ptr(image.pipelines.back())
+        ));
+
+        {
             // TODO: may need a separate pool per pipeline layout
             unsigned max_draw_count = 1024; // TODO: grow
-            VkDescriptorPoolSize pool_size[] = {
+            vector<VkDescriptorPoolSize> pool_size = {
                 {
                     .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .descriptorCount = 1,
@@ -895,84 +890,87 @@ namespace imv {
                     .descriptorCount = 1,
                 }, 
             };
-            VkDescriptorPoolCreateInfo create_info = {
-                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT ,
-                .maxSets = view.image_count * max_draw_count,
-                .poolSizeCount = std::size(pool_size),
-                .pPoolSizes = pool_size,
-            };
-            check(vkCreateDescriptorPool(
-                r.device.get(), &create_info, nullptr, 
-                out_ptr(view.descriptor_pool))
-            );
-        }
-
-        if (recording) {
-            image.descriptor_sets.push_back({});
+            auto insert = r.descriptor_pools.insert({pool_size, {}});
+            if (insert.second) {
+                VkDescriptorPoolCreateInfo create_info = {
+                    .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                    .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT ,
+                    .maxSets = view.image_count * max_draw_count,
+                    .poolSizeCount = uint32_t(std::size(pool_size)),
+                    .pPoolSizes = pool_size.data(),
+                };
+                check(vkCreateDescriptorPool(
+                    r.device.get(), &create_info, nullptr, 
+                    out_ptr(insert.first->second))
+                );
+            }
+            VkDescriptorPool descriptor_pool = insert.first->second.get();
+            
+            image.descriptor_sets.push_back({{}, {descriptor_pool}});
             auto layout = r.descriptor_set_layout.get();
             VkDescriptorSetAllocateInfo descriptor_set_allocate_info = {
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                .descriptorPool = view.descriptor_pool.get(),
+                .descriptorPool = descriptor_pool,
                 .descriptorSetCount = 1,
                 .pSetLayouts = &layout,
             };
             check(vkAllocateDescriptorSets(
                 r.device.get(), &descriptor_set_allocate_info, 
-                &image.descriptor_sets.back()
+                out_ptr(image.descriptor_sets.back())
             ));
-            // TODO: support multiple images in one draw
-            VkDescriptorImageInfo descriptor_image_info[] = {
-                {
-                    .sampler = image.samplers.back().get(),
-                    .imageView = texture_view,
-                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                },
-            };
-            VkDescriptorBufferInfo descriptor_buffer_info[] = {
-                {
-                    .buffer = image.uniform_buffer.get(),
-                    .offset = image.uniform_buffer_size,
-                    .range = uniform_size,
-                }
-            };
-            VkWriteDescriptorSet write_descriptor_set[] = {
-                {
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = image.descriptor_sets.back(),
-                    .dstBinding = 0,
-                    .dstArrayElement = 0,
-                    .descriptorCount = uint32_t(size(descriptor_buffer_info)),
-                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pBufferInfo = descriptor_buffer_info,
-                }, {
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = image.descriptor_sets.back(),
-                    .dstBinding = 1,
-                    .dstArrayElement = 0,
-                    .descriptorCount = uint32_t(size(descriptor_image_info)),
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = descriptor_image_info,
-                },
-            };
-            vkUpdateDescriptorSets(
-                r.device.get(), 
-                size(write_descriptor_set), write_descriptor_set, 0, nullptr
-            );
-
-            vkCmdBindPipeline(
-                image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                image.pipelines.back().get()
-            );
-
-            vkCmdBindDescriptorSets(
-                image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                r.video_pipeline_layout.get(), 0, 1, 
-                &image.descriptor_sets.back(), 0, nullptr
-            );
-
-            vkCmdDraw(image.command_buffer, info.vertex_count, 1, 0, 0);
         }
+        // TODO: support multiple images in one draw
+        VkDescriptorImageInfo descriptor_image_info[] = {
+            {
+                .sampler = image.samplers.back().get(),
+                .imageView = texture_view,
+                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            },
+        };
+        VkDescriptorBufferInfo descriptor_buffer_info[] = {
+            {
+                .buffer = image.uniform_buffer.get(),
+                .offset = image.uniform_buffer_size,
+                .range = uniform_size,
+            }
+        };
+        VkWriteDescriptorSet write_descriptor_set[] = {
+            {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = image.descriptor_sets.back().get(),
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = uint32_t(size(descriptor_buffer_info)),
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .pBufferInfo = descriptor_buffer_info,
+            }, {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = image.descriptor_sets.back().get(),
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = uint32_t(size(descriptor_image_info)),
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = descriptor_image_info,
+            },
+        };
+        vkUpdateDescriptorSets(
+            r.device.get(), 
+            size(write_descriptor_set), write_descriptor_set, 0, nullptr
+        );
+
+        vkCmdBindPipeline(
+            image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            image.pipelines.back().get()
+        );
+
+        auto descriptor_set = image.descriptor_sets.back().get();
+        vkCmdBindDescriptorSets(
+            image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            r.video_pipeline_layout.get(), 0, 1, 
+            &descriptor_set, 0, nullptr
+        );
+
+        vkCmdDraw(image.command_buffer, info.vertex_count, 1, 0, 0);
 
         // TODO: store offset in uniform_buffer?
         check(vmaCopyMemoryToAllocation(
@@ -981,10 +979,8 @@ namespace imv {
             image.uniform_buffer_size, info.uniform_source_size
         ));
 
-        if (recording) {
-            image.uniform_buffer_size += 
-                aligned(info.uniform_source_size, r.offset_alignment);
-        }
+        image.uniform_buffer_size += 
+            aligned(info.uniform_source_size, r.offset_alignment);
 
         return true;
     }
@@ -995,18 +991,14 @@ namespace imv {
         if (!view.images)
             return;
         imv::image& image = view.images[view.image_index];
-        bool recording = true; // TODO
 
-        if (recording) {
-            vkCmdEndRenderPass(image.command_buffer);
+        vkCmdEndRenderPass(image.command_buffer);
 
-            check(vkEndCommandBuffer(image.command_buffer));
-        }
+        check(vkEndCommandBuffer(image.command_buffer));
 
         auto wait_semaphore = r.swapchain_image_ready_semaphore.get();
         auto signal_semaphore = image.render_finished_semaphore.get();
-        VkPipelineStageFlags wait_stage =
-            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkSubmitInfo submitInfo = {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .waitSemaphoreCount = 1,

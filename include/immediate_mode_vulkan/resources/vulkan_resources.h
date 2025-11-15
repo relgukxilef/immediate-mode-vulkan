@@ -1,5 +1,6 @@
 #pragma once
 
+#include "vulkan/vulkan_core.h"
 #include <memory>
 #include <stdexcept>
 
@@ -68,6 +69,14 @@ namespace imv {
         }
     };
 
+    struct vulkan_descriptor_set_deleter {
+        typedef VkDescriptorSet pointer;
+        VkDescriptorPool pool;
+        void operator()(VkDescriptorSet object) {
+            check(vkFreeDescriptorSets(current_device, pool, 1, &object));
+        }
+    };
+
     template<typename T, auto Deleter>
     using unique_vulkan_handle = 
         std::unique_ptr<T, vulkan_handle_deleter<T, Deleter>>;
@@ -107,4 +116,6 @@ namespace imv {
     using unique_shader_module = 
         unique_vulkan_handle<VkShaderModule, vkDestroyShaderModule>;
     using unique_buffer = unique_vulkan_handle<VkBuffer, vkDestroyBuffer>;
+    using unique_descriptor_set = 
+        std::unique_ptr<VkDescriptorSet, vulkan_descriptor_set_deleter>;
 }
