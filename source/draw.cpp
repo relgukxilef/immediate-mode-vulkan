@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <immediate_mode_vulkan/draw.h>
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
@@ -72,6 +73,21 @@ namespace imv {
         typedef void is_transparent;
     };
 
+    struct vector_hash {
+        typedef void is_transparent;
+        size_t operator()(const vector<uint64_t>& value) const {
+            return operator()(span<const uint64_t>(value.data(), value.size()));
+        }
+        size_t operator()(span<const uint64_t> value) const {
+            // unfortunately, C++ doesn't offer hash<span>
+            size_t hash = 0;
+            for (auto element : value) {
+                hash = (hash * 820541279138450587ull) ^ element;
+            }
+            return hash;
+        }
+    };
+
     struct renderer_data {
         VkPhysicalDevice physical_device;
         VkSurfaceKHR surface;
@@ -110,8 +126,8 @@ namespace imv {
         > image_cache;
         
         unordered_map<
-            vector<VkDescriptorPoolSize>,
-            unique_descriptor_pool, hasher, equal_to<>
+            vector<uint64_t>,
+            unique_descriptor_pool, vector_hash, equal_to<>
         > descriptor_pools;
 
         view view;
@@ -890,7 +906,10 @@ namespace imv {
                     .descriptorCount = 1,
                 }, 
             };
-            auto insert = r.descriptor_pools.insert({pool_size, {}});
+
+            vector<uint64_t> key;
+            visit(key, pool_size);
+            auto insert = r.descriptor_pools.insert({key, {}});
             if (insert.second) {
                 VkDescriptorPoolCreateInfo create_info = {
                     .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
