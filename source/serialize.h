@@ -45,6 +45,7 @@ namespace imv {
         visit(visitor, object.type);
         visit(visitor, object.descriptorCount);
     }
+
     void visit(
         auto&& visitor, auto&& object, tag_t<VkDescriptorPoolCreateInfo>
     ) {
@@ -53,5 +54,25 @@ namespace imv {
         visit(visitor, object.flags);
         visit(visitor, object.maxSets);
         visit_array(visitor, object.pPoolSizes, object.poolSizeCount);
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, tag_t<VkDescriptorSetLayoutBinding>
+    ) {
+        visit(visitor, object.binding);
+        visit(visitor, object.descriptorType);
+        visit(visitor, object.descriptorCount);
+        visit(visitor, object.stageFlags);
+        // TODO: object.pImmutableSamplers is a handle
+        visit(visitor, object.descriptorCount);
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, tag_t<VkDescriptorSetLayoutCreateInfo>
+    ) {
+        visit(visitor, object.sType);
+        //visit(visitor, object.pNext);
+        visit(visitor, object.flags);
+        visit_array(visitor, object.pBindings, object.bindingCount);
     }
 }

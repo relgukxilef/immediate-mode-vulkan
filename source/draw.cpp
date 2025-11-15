@@ -69,6 +69,12 @@ namespace imv {
         filesystem::file_time_type last_update;
     };
 
+    struct pipeline {
+        unique_descriptor_set_layout descriptor_set_layout;
+        unique_pipeline_layout pipeline_layout;
+        unique_pipeline pipeline;
+    };
+
     struct string_hash : std::hash<string_view> {
         typedef void is_transparent;
     };
@@ -99,9 +105,6 @@ namespace imv {
         unique_command_pool command_pool;
 
         unique_allocator allocator;
-
-        // TODO: support multiple layouts
-        unique_descriptor_set_layout descriptor_set_layout;
 
         unique_render_pass render_pass;
 
@@ -629,47 +632,53 @@ namespace imv {
 
         VkDeviceSize uniform_size = 128;
 
-        if (!r.video_pipeline_layout) {
-            {
-                auto descriptor_set_layout_binding = {
-                    VkDescriptorSetLayoutBinding{
-                        .binding = 0,
-                        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                        .descriptorCount = 1,
-                        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-                    }, {
-                        .binding = 1,
-                        .descriptorType = 
-                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                        .descriptorCount = 1,
-                        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-                    },
-                };
-                VkDescriptorSetLayoutCreateInfo create_info = {
-                    .sType = 
-                        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                    .bindingCount =
-                        uint32_t(descriptor_set_layout_binding.size()),
-                    .pBindings = descriptor_set_layout_binding.begin(),
-                };
+        VkDescriptorSetLayout descriptor_set_layout;
+        {
+            auto descriptor_set_layout_binding = {
+                VkDescriptorSetLayoutBinding{
+                    .binding = 0,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .descriptorCount = 1,
+                    .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                }, {
+                    .binding = 1,
+                    .descriptorType = 
+                        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1,
+                    .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                },
+            };
+            VkDescriptorSetLayoutCreateInfo create_info = {
+                .sType = 
+                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .bindingCount =
+                    uint32_t(descriptor_set_layout_binding.size()),
+                .pBindings = descriptor_set_layout_binding.begin(),
+            };
+            vector<uint64_t> key;
+            visit(key, create_info);
+
+            auto insert = r.descriptor_set_layouts.insert({key, {}});
+            if (insert.second) {
                 check(vkCreateDescriptorSetLayout(
                     r.device.get(), &create_info,
-                    nullptr, out_ptr(r.descriptor_set_layout)
+                    nullptr, out_ptr(insert.first->second)
                 ));
             }
+            descriptor_set_layout = insert.first->second.get();
+        }
 
-            {
-                auto layout = r.descriptor_set_layout.get();
-                VkPipelineLayoutCreateInfo create_info = {
-                    .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                    .setLayoutCount = 1,
-                    .pSetLayouts = &layout,
-                };
-                check(vkCreatePipelineLayout(
-                    r.device.get(), &create_info, nullptr, 
-                    out_ptr(r.video_pipeline_layout)
-                ));
-            }
+        if (!r.video_pipeline_layout) {
+            auto layout = descriptor_set_layout;
+            VkPipelineLayoutCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                .setLayoutCount = 1,
+                .pSetLayouts = &layout,
+            };
+            check(vkCreatePipelineLayout(
+                r.device.get(), &create_info, nullptr, 
+                out_ptr(r.video_pipeline_layout)
+            ));
         }
 
         if (!image.uniform_buffer) {
@@ -931,12 +940,11 @@ namespace imv {
             VkDescriptorPool descriptor_pool = insert.first->second.get();
             
             image.descriptor_sets.push_back({{}, {descriptor_pool}});
-            auto layout = r.descriptor_set_layout.get();
             VkDescriptorSetAllocateInfo descriptor_set_allocate_info = {
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                 .descriptorPool = descriptor_pool,
                 .descriptorSetCount = 1,
-                .pSetLayouts = &layout,
+                .pSetLayouts = &descriptor_set_layout,
             };
             check(vkAllocateDescriptorSets(
                 r.device.get(), &descriptor_set_allocate_info, 
