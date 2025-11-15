@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <span>
 #include <type_traits>
 #include <vector>
@@ -7,23 +8,18 @@
 
 namespace imv {
     template<class T>
-    void update_hash(size_t& hash, T value) {
-        hash = (hash * 820541279138450587ull) ^ std::hash<T>()(value);
-    }
-
-    template<class T>
     struct tag_t {};
     
     template<std::integral T>
-    void visit(size_t& hash, auto value, tag_t<T>) {
-        update_hash(hash, value);
+    void visit(std::vector<uint64_t>& buffer, auto value, tag_t<T>) {
+        buffer.push_back(uint64_t(value));
     }
 
     template<class T>
     std::enable_if_t<std::is_enum_v<T>> visit(
-        size_t& hash, auto value, tag_t<T>
+        std::vector<uint64_t>& buffer, auto value, tag_t<T>
     ) {
-        update_hash(hash, value);
+        buffer.push_back(uint64_t(value));
     }
 
     void visit(auto&& visitor, auto&& object) {
@@ -51,20 +47,4 @@ namespace imv {
         visit(visitor, object.type);
         visit(visitor, object.descriptorCount);
     }
-
-    struct hasher {
-        size_t operator()(auto&& object) const {
-            size_t result = 0;
-            visit(result, object);
-            return result;
-        }
-    };
-
-}
-
-inline bool operator==(
-    const VkDescriptorPoolSize& a, const VkDescriptorPoolSize& b
-) {
-    // TODO: use exact comparison
-    return imv::hasher()(a) == imv::hasher()(b);
 }
