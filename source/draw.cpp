@@ -136,6 +136,8 @@ namespace imv {
             unique_descriptor_pool, vector_hash, equal_to<>
         > descriptor_pools;
 
+        unique_pipeline_cache pipeline_cache;
+
         view view;
     };
 
@@ -401,6 +403,15 @@ namespace imv {
             r.ktx_device.get(), physical_device, r.device.get(), 
             r.graphics_queue, r.command_pool.get(), nullptr
         ));
+
+        {
+            VkPipelineCacheCreateInfo create_info{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+            };
+            vkCreatePipelineCache(
+                r.device.get(), &create_info, nullptr, out_ptr(r.pipeline_cache)
+            );
+        }
     }
 
     renderer::~renderer() {
@@ -904,7 +915,7 @@ namespace imv {
             .renderPass = r.render_pass.get(),
         };
         check(vkCreateGraphicsPipelines(
-            r.device.get(), nullptr, 1, &create_info, nullptr,
+            r.device.get(), r.pipeline_cache.get(), 1, &create_info, nullptr,
             out_ptr(image.pipelines.back())
         ));
 
