@@ -118,4 +118,6 @@ namespace imv {
     using unique_buffer = unique_vulkan_handle<VkBuffer, vkDestroyBuffer>;
     using unique_descriptor_set = 
         std::unique_ptr<VkDescriptorSet, vulkan_descriptor_set_deleter>;
+    using unique_pipeline_cache = 
+        unique_vulkan_handle<VkPipelineCache, vkDestroyPipelineCache>;
 }
