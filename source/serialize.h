@@ -75,4 +75,24 @@ namespace imv {
         visit(visitor, object.flags);
         visit_array(visitor, object.pBindings, object.bindingCount);
     }
+
+    void visit(
+        auto&& visitor, auto&& object, tag_t<VkPushConstantRange>
+    ) {
+        visit(visitor, object.stageFlags);
+        visit(visitor, object.offset);
+        visit(visitor, object.size);
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, tag_t<VkPipelineLayoutCreateInfo>
+    ) {
+        visit(visitor, object.sType);
+        //visit(visitor, object.pNext);
+        visit(visitor, object.flags);
+        //visit_array(visitor, object.pSetLayouts, object.setLayoutCount);
+        visit_array(
+            visitor, object.pPushConstantRanges, object.pushConstantRangeCount
+        );
+    }
 }

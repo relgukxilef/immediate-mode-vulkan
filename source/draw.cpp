@@ -108,8 +108,6 @@ namespace imv {
 
         unique_render_pass render_pass;
 
-        unique_pipeline_layout video_pipeline_layout;
-        
         unique_semaphore swapchain_image_ready_semaphore;
 
         uint32_t graphics_queue_family = ~0u, present_queue_family = ~0u;
@@ -130,8 +128,8 @@ namespace imv {
         
         unordered_map<
             vector<uint64_t>,
-            unique_descriptor_set_layout, vector_hash, equal_to<>
-        > descriptor_set_layouts;
+            pipeline, vector_hash, equal_to<>
+        > pipeline_layouts;
 
         unordered_map<
             vector<uint64_t>,
@@ -633,6 +631,7 @@ namespace imv {
         VkDeviceSize uniform_size = 128;
 
         VkDescriptorSetLayout descriptor_set_layout;
+        VkPipelineLayout pipeline_layout;
         {
             auto descriptor_set_layout_binding = {
                 VkDescriptorSetLayoutBinding{
@@ -648,37 +647,38 @@ namespace imv {
                     .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
                 },
             };
-            VkDescriptorSetLayoutCreateInfo create_info = {
+            VkDescriptorSetLayoutCreateInfo descriptor_create_info = {
                 .sType = 
                     VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                 .bindingCount =
                     uint32_t(descriptor_set_layout_binding.size()),
                 .pBindings = descriptor_set_layout_binding.begin(),
             };
-            vector<uint64_t> key;
-            visit(key, create_info);
-
-            auto insert = r.descriptor_set_layouts.insert({key, {}});
-            if (insert.second) {
-                check(vkCreateDescriptorSetLayout(
-                    r.device.get(), &create_info,
-                    nullptr, out_ptr(insert.first->second)
-                ));
-            }
-            descriptor_set_layout = insert.first->second.get();
-        }
-
-        if (!r.video_pipeline_layout) {
-            auto layout = descriptor_set_layout;
-            VkPipelineLayoutCreateInfo create_info = {
+            VkPipelineLayoutCreateInfo pipeline_create_info = {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                 .setLayoutCount = 1,
-                .pSetLayouts = &layout,
             };
-            check(vkCreatePipelineLayout(
-                r.device.get(), &create_info, nullptr, 
-                out_ptr(r.video_pipeline_layout)
-            ));
+            vector<uint64_t> key;
+            visit(key, descriptor_create_info);
+            visit(key, pipeline_create_info);
+
+            auto insert = r.pipeline_layouts.insert({key, {}});
+            if (insert.second) {
+                check(vkCreateDescriptorSetLayout(
+                    r.device.get(), &descriptor_create_info, nullptr, 
+                    out_ptr(insert.first->second.descriptor_set_layout)
+                ));
+                descriptor_set_layout = 
+                    insert.first->second.descriptor_set_layout.get();
+                pipeline_create_info.pSetLayouts = &descriptor_set_layout;
+                check(vkCreatePipelineLayout(
+                    r.device.get(), &pipeline_create_info, nullptr, 
+                    out_ptr(insert.first->second.pipeline_layout)
+                ));
+            }
+            descriptor_set_layout = 
+                insert.first->second.descriptor_set_layout.get();
+            pipeline_layout = insert.first->second.pipeline_layout.get();
         }
 
         if (!image.uniform_buffer) {
@@ -900,7 +900,7 @@ namespace imv {
             .pRasterizationState = &pipeline_rasterization_state,
             .pMultisampleState = &pipeline_multisample_state,
             .pColorBlendState = &pipeline_color_blend_state,
-            .layout = r.video_pipeline_layout.get(),
+            .layout = pipeline_layout,
             .renderPass = r.render_pass.get(),
         };
         check(vkCreateGraphicsPipelines(
@@ -998,7 +998,7 @@ namespace imv {
         auto descriptor_set = image.descriptor_sets.back().get();
         vkCmdBindDescriptorSets(
             image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            r.video_pipeline_layout.get(), 0, 1, 
+            pipeline_layout, 0, 1, 
             &descriptor_set, 0, nullptr
         );
 
