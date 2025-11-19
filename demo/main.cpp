@@ -128,7 +128,7 @@ int main() {
                 },
                 .images = {
                     {
-                        .file_name = "demo/placeholder.ktx",
+                        .file_name = "demo/1.png.ktx",
                         .sampler_info = {
                             .magFilter = VK_FILTER_LINEAR,
                             .minFilter = VK_FILTER_LINEAR,
@@ -140,7 +140,9 @@ int main() {
                             .minLod = 0.0,
                             .maxLod = VK_LOD_CLAMP_NONE,
                         }
-                    }
+                    }, {
+                        .file_name = "demo/2.png.ktx",
+                    }, 
                 },
                 .uniform_source_pointer = &uniforms,
                 .uniform_source_size = sizeof(uniforms),
@@ -149,6 +151,21 @@ int main() {
             
             uniforms.time += 0.5f;
         }
+        
+        imv::draw({
+            .stages = {
+                { 
+                    .code_file_name = "demo/vertex.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
+                }, { 
+                    .code_file_name = "demo/flat_fragment.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
+                }, 
+            },
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = 4,
+        });
 
         imv::submit();
         
