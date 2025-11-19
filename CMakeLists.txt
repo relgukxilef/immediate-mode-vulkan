@@ -119,19 +119,26 @@ endfunction(add_shader)
 
 add_shader(demo demo/vertex.glsl)
 add_shader(demo demo/fragment.glsl)
+add_shader(demo demo/flat_fragment.glsl)
 
-add_custom_command(
-    OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
-    COMMAND 
-        ktx create --format R8G8B8A8_SRGB --encode uastc --generate-mipmap
-        ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
-    COMMAND # Unfortunately, ktx doesn't update the modification date at the end
-        ${CMAKE_COMMAND} -E touch
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/demo/placeholder.png ktx
-    COMMENT "Compress image"
-)
-target_sources(
-    demo PRIVATE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/placeholder.ktx
-)
+function(add_texture TARGET TEXTURE)
+    add_custom_command(
+        OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${TEXTURE}.ktx
+        COMMAND 
+            ktx create --format R8G8B8A8_SRGB --encode uastc --generate-mipmap
+            ${CMAKE_CURRENT_SOURCE_DIR}/${TEXTURE}
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${TEXTURE}.ktx
+        # Unfortunately, ktx doesn't update the modification date at the end
+        COMMAND 
+            ${CMAKE_COMMAND} -E touch
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${TEXTURE}.ktx
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${TEXTURE} ktx
+        COMMENT "Compress image"
+    )
+    target_sources(
+        ${TARGET} PRIVATE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${TEXTURE}.ktx
+    )
+endfunction()
+
+add_texture(demo demo/1.png)
+add_texture(demo demo/2.png)

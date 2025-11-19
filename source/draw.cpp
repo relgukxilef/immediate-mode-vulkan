@@ -644,26 +644,29 @@ namespace imv {
         VkDescriptorSetLayout descriptor_set_layout;
         VkPipelineLayout pipeline_layout;
         {
-            auto descriptor_set_layout_binding = {
-                VkDescriptorSetLayoutBinding{
+            vector<VkDescriptorSetLayoutBinding> descriptor_set_layout_binding {
+                {
                     .binding = 0,
                     .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .descriptorCount = 1,
                     .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-                }, {
-                    .binding = 1,
+                },
+            };
+            for (auto& _: info.images) {
+                descriptor_set_layout_binding.push_back({
+                    .binding = uint32_t(descriptor_set_layout_binding.size()),
                     .descriptorType = 
                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     .descriptorCount = 1,
                     .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-                },
-            };
+                });
+            }
             VkDescriptorSetLayoutCreateInfo descriptor_create_info = {
                 .sType = 
                     VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                 .bindingCount =
                     uint32_t(descriptor_set_layout_binding.size()),
-                .pBindings = descriptor_set_layout_binding.begin(),
+                .pBindings = descriptor_set_layout_binding.data(),
             };
             VkPipelineLayoutCreateInfo pipeline_create_info = {
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -714,8 +717,7 @@ namespace imv {
             }
         }
 
-        VkImage texture_image;
-        VkImageView texture_view;
+        size_t first_image_view = image.image_views.size();
 
         for (const auto& image_file : info.images) {
             auto file_name = image_file.file_name;
@@ -780,9 +782,6 @@ namespace imv {
             image.images.push_back(entry->second.image);
             image.image_memories.push_back(entry->second.device_memory);
             image.image_views.push_back(entry->second.view);
-
-            texture_image = entry->second.image->get();
-            texture_view = entry->second.view->get();
         }
 
         image.samplers.push_back({});
@@ -808,7 +807,6 @@ namespace imv {
 
         image.pipelines.push_back({});
         
-        // TODO: use VkPipelineCache
         r.pipeline_shader_stages.resize(info.stages.size());
 
         for (auto i = 0u; i < info.stages.size(); i++) {
@@ -926,16 +924,19 @@ namespace imv {
                 {
                     .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                     .descriptorCount = 1,
-                }, {
+                },
+            };
+            for (auto& _ : info.images) {
+                pool_size.push_back({
                     .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     .descriptorCount = 1,
-                }, 
-            };
+                });
+            }
             VkDescriptorPoolCreateInfo create_info = {
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                 .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT ,
                 .maxSets = view.image_count * max_draw_count,
-                .poolSizeCount = uint32_t(std::size(pool_size)),
+                .poolSizeCount = uint32_t(size(pool_size)),
                 .pPoolSizes = pool_size.data(),
             };
 
@@ -962,14 +963,6 @@ namespace imv {
                 out_ptr(image.descriptor_sets.back())
             ));
         }
-        // TODO: support multiple images in one draw
-        VkDescriptorImageInfo descriptor_image_info[] = {
-            {
-                .sampler = image.samplers.back().get(),
-                .imageView = texture_view,
-                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            },
-        };
         VkDescriptorBufferInfo descriptor_buffer_info[] = {
             {
                 .buffer = image.uniform_buffer.get(),
@@ -977,7 +970,7 @@ namespace imv {
                 .range = uniform_size,
             }
         };
-        VkWriteDescriptorSet write_descriptor_set[] = {
+        vector<VkWriteDescriptorSet> write_descriptor_set = {
             {
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .dstSet = image.descriptor_sets.back().get(),
@@ -986,19 +979,31 @@ namespace imv {
                 .descriptorCount = uint32_t(size(descriptor_buffer_info)),
                 .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                 .pBufferInfo = descriptor_buffer_info,
-            }, {
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = image.descriptor_sets.back().get(),
-                .dstBinding = 1,
-                .dstArrayElement = 0,
-                .descriptorCount = uint32_t(size(descriptor_image_info)),
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = descriptor_image_info,
             },
         };
+        vector<VkDescriptorImageInfo> descriptor_image_info;
+        for (int i = 0; i < info.images.size(); i++) {
+            descriptor_image_info.push_back({
+                .sampler = image.samplers.back().get(),
+                .imageView = image.image_views[first_image_view + i]->get(),
+                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            });
+        }
+
+        for (unsigned i = 0; i < info.images.size(); i++) {
+            write_descriptor_set.push_back({
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = image.descriptor_sets.back().get(),
+                .dstBinding = 1 + i,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &descriptor_image_info[i],
+            });
+        }
         vkUpdateDescriptorSets(
             r.device.get(), 
-            size(write_descriptor_set), write_descriptor_set, 0, nullptr
+            size(write_descriptor_set), data(write_descriptor_set), 0, nullptr
         );
 
         vkCmdBindPipeline(
