@@ -24,6 +24,17 @@ namespace imv {
         VkPipelineShaderStageCreateInfo info;
     };
 
+    struct buffer_data {
+        buffer_data() = default;
+        buffer_data(const void* pointer, size_t size) : 
+            pointer(pointer), size(size) {}
+        template<class T>
+        buffer_data(const T& t) : buffer_data(&t, sizeof(t)) {}
+
+        const void* pointer;
+        size_t size;
+    };
+
     struct vertex_binding_info {
         const void* buffer_source_pointer;
         size_t buffer_source_size;
@@ -44,6 +55,7 @@ namespace imv {
         std::initializer_list<image_info> images;
         const void* uniform_source_pointer;
         VkDeviceSize uniform_source_size;
+        buffer_data uniform_source;
         uint32_t vertex_count = 0;
     };
 

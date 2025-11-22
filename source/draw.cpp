@@ -1065,10 +1065,11 @@ namespace imv {
             image.pipelines.back().get()
         );
 
-        vkCmdBindVertexBuffers(
-            image.command_buffer, 0, size(info.vertex_input_bindings), 
-            data(vertex_buffers), data(vertex_offsets)
-        );
+        if (!vertex_buffers.empty())
+            vkCmdBindVertexBuffers(
+                image.command_buffer, 0, size(vertex_buffers), 
+                data(vertex_buffers), data(vertex_offsets)
+            );
 
         auto descriptor_set = image.descriptor_sets.back().get();
         vkCmdBindDescriptorSets(
@@ -1080,14 +1081,19 @@ namespace imv {
         vkCmdDraw(image.command_buffer, info.vertex_count, 1, 0, 0);
 
         // TODO: store offset in uniform_buffer?
+        const void* pointer = info.uniform_source_pointer;
+        size_t size = info.uniform_source_size;
+        if (!pointer) {
+            pointer = info.uniform_source.pointer;
+            size = info.uniform_source.size;
+        }
         check(vmaCopyMemoryToAllocation(
-            r.allocator.get(), info.uniform_source_pointer, 
+            r.allocator.get(), pointer, 
             image.uniform_allocation.get(), 
-            image.uniform_buffer_size, info.uniform_source_size
+            image.uniform_buffer_size, size
         ));
 
-        image.uniform_buffer_size += 
-            aligned(info.uniform_source_size, r.offset_alignment);
+        image.uniform_buffer_size += aligned(size, r.offset_alignment);
 
         return true;
     }

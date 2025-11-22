@@ -111,86 +111,39 @@ int main() {
     while (!glfwWindowShouldClose(window.get())) {
         imv::wait_frame();
 
-        struct {
-            float time;
-        } uniforms;
-
-        uniforms.time = float(glfwGetTime());
-        
-        vec2 positions[] = { // and texture coordinates
-            vec2(-1, -1), vec2(0, 0),
-            vec2(1, -1), vec2(1, 0),
-            vec2(-1, 1), vec2(0, 1),
-            vec2(1, 1), vec2(1, 1),
-        };
-        vec3 colors[] = {
-            vec3(1, 1, 0),
-            vec3(1, 0, 1),
-            vec3(0, 1, 1),
-            vec3(0, 1, 0),
+        struct uniforms {
+            glm::vec2 position;
         };
 
-        for (auto i = 0u; i < 1000; i++) {
-            imv::draw({
-                .stages = {
-                    { 
-                        .code_file_name = "demo/vertex.glsl.spv",
-                        .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
-                    }, { 
-                        .code_file_name = "demo/fragment.glsl.spv",
-                        .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
-                    }, 
-                },
-                .vertex_input_bindings = {
-                    {
-                        .buffer_source_pointer = &positions,
-                        .buffer_source_size = sizeof(positions),
-                        .description = {
-                            .stride = 2 * sizeof(vec2),
-                            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-                        }, 
-                        .attributes = {
-                            { 0, 0, VK_FORMAT_R32G32_SFLOAT, },
-                            { 1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(vec2) },
-                        },
-                    }, {
-                        .buffer_source_pointer = &colors,
-                        .buffer_source_size = sizeof(colors),
-                        .description = {
-                            .binding = 1,
-                            .stride = sizeof(vec3),
-                            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-                        }, 
-                        .attributes = {
-                            { 2, 1, VK_FORMAT_R32G32B32_SFLOAT, },
-                        },
-                    },
-                },
-                .images = {
-                    {
-                        .file_name = "demo/1.png.ktx",
-                        .sampler_info = {
-                            .magFilter = VK_FILTER_LINEAR,
-                            .minFilter = VK_FILTER_LINEAR,
-                            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                            .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                            .anisotropyEnable = VK_FALSE,
-                            .minLod = 0.0,
-                            .maxLod = VK_LOD_CLAMP_NONE,
-                        }
-                    }, {
-                        .file_name = "demo/2.png.ktx",
-                    }, 
-                },
-                .uniform_source_pointer = &uniforms,
-                .uniform_source_size = sizeof(uniforms),
-                .vertex_count = 4,
-            });
-            
-            uniforms.time += 0.5f;
-        }
+        imv::draw({
+            .stages = {
+                { 
+                    .code_file_name = "demo/vertex.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
+                }, { 
+                    .code_file_name = "demo/fragment.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
+                }, 
+            },
+            .images = { { .file_name = "demo/1.png.ktx", }, },
+            .uniform_source = uniforms{ .position = { -0.2, 0.0 }},
+            .vertex_count = 4,
+        });
+
+        imv::draw({
+            .stages = {
+                { 
+                    .code_file_name = "demo/vertex.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
+                }, { 
+                    .code_file_name = "demo/fragment.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
+                }, 
+            },
+            .images = { { .file_name = "demo/2.png.ktx", }, },
+            .uniform_source = uniforms{ .position = { 0.2, 0.0 }},
+            .vertex_count = 4,
+        });
 
         imv::submit();
         
