@@ -65,6 +65,8 @@ add_library(
     source/resources/vulkan_memory_allocator_resource.cpp
     include/immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h
     include/immediate_mode_vulkan/resources/ktx_resources.h
+    include/immediate_mode_vulkan/edit.h
+    source/edit.cpp
 )
 
 target_link_libraries(
@@ -78,22 +80,6 @@ target_include_directories(
 )
 
 target_compile_features(ImmediateModeVulkan PRIVATE cxx_std_23)
-
-add_executable(
-    demo
-    demo/main.cpp
-)
-
-target_compile_features(demo PRIVATE cxx_std_23)
-
-target_link_libraries(
-    demo PRIVATE ImmediateModeVulkan
-)
-
-target_include_directories(
-    demo PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
 
 function(add_shader TARGET SHADER)
     find_program(GLSLC glslc)
@@ -116,6 +102,25 @@ function(add_shader TARGET SHADER)
         ${TARGET} PRIVATE ${output_path}.spv ${input_path}
     )
 endfunction(add_shader)
+
+add_shader(ImmediateModeVulkan source/flat_vertex.glsl)
+add_shader(ImmediateModeVulkan source/flat_fragment.glsl)
+
+add_executable(
+    demo
+    demo/main.cpp
+)
+
+target_compile_features(demo PRIVATE cxx_std_23)
+
+target_link_libraries(
+    demo PRIVATE ImmediateModeVulkan
+)
+
+target_include_directories(
+    demo PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 add_shader(demo demo/vertex.glsl)
 add_shader(demo demo/fragment.glsl)

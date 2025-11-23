@@ -1,3 +1,4 @@
+#include "vulkan/vulkan_core.h"
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <initializer_list>
@@ -15,6 +16,8 @@ namespace imv {
     };
 
     extern struct renderer* global_renderer;
+
+    VkExtent2D get_surface_size(renderer* renderer = nullptr);
 
     void wait_frame(renderer* renderer = nullptr);
 

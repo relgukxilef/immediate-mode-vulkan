@@ -1,7 +1,7 @@
-#include <array>
+#include <glm/glm.hpp>
 
 namespace imv {
     
-    std::array<float, 2> edit(std::array<float, 2>& t);
+    glm::vec2 edit(glm::vec2& t);
 
 }

@@ -1,4 +1,3 @@
-#include <iostream>
 #include <cassert>
 #include <memory>
 
@@ -12,6 +11,7 @@
 
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/draw.h>
+#include <immediate_mode_vulkan/edit.h>
 
 
 using std::unique_ptr;
@@ -107,6 +107,8 @@ int main() {
 
     imv::renderer r(instance.get(), surface.get());
     imv::global_renderer = &r;
+
+    vec2 position = { -0.2, 0.0 };
     
     while (!glfwWindowShouldClose(window.get())) {
         imv::wait_frame();
@@ -126,7 +128,7 @@ int main() {
                 }, 
             },
             .images = { { .file_name = "demo/1.png.ktx", }, },
-            .uniform_source = uniforms{ .position = { -0.2, 0.0 }},
+            .uniform_source = uniforms{ .position = imv::edit(position)},
             .vertex_count = 4,
         });
 

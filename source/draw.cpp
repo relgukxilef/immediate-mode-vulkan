@@ -4,7 +4,7 @@
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
 #include <immediate_mode_vulkan/resources/ktx_resources.h>
 #include "serialize.h"
-#include "vulkan/vulkan_core.h"
+#include <vulkan/vulkan_core.h>
 
 #include <memory>
 #include <vector>
@@ -426,6 +426,11 @@ namespace imv {
         if (!renderer)
             renderer = global_renderer;
         return *renderer;
+    }
+
+    VkExtent2D get_surface_size(renderer* renderer) {
+        renderer_data& r = *get(renderer).d;
+        return r.view.extent;
     }
 
     void wait_frame(renderer* renderer) {
