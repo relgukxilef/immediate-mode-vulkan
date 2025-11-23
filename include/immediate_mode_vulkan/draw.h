@@ -24,16 +24,23 @@ namespace imv {
         VkPipelineShaderStageCreateInfo info;
     };
 
+    struct vertex_binding_info {
+        const void* buffer_source_pointer;
+        size_t buffer_source_size;
+        VkVertexInputBindingDescription description;
+        std::initializer_list<VkVertexInputAttributeDescription> attributes;
+    };
+
     struct image_info {
         std::string_view file_name;
         VkSamplerCreateInfo sampler_info;
     };
 
     struct draw_info {
-        // TODO: maybe use snake case everywhere
         renderer* renderer = nullptr;
         bool prepare_only = false;
         std::initializer_list<stage_info> stages;
+        std::initializer_list<vertex_binding_info> vertex_input_bindings;
         std::initializer_list<image_info> images;
         const void* uniform_source_pointer;
         VkDeviceSize uniform_source_size;
