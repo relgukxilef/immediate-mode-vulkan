@@ -32,6 +32,11 @@ namespace imv {
         unique_buffer uniform_buffer;
         unique_allocation uniform_allocation;
 
+        size_t vertex_buffer_size = 0;
+        size_t vertex_buffer_capacity = 64 * 1024 * 1024;
+        unique_buffer vertex_buffer;
+        unique_allocation vertex_allocation;
+
         unique_framebuffer swapchain_framebuffer;
         unique_image_view swapchain_image_view;
 
@@ -600,6 +605,7 @@ namespace imv {
         image.image_views.clear();
         image.descriptor_sets.clear();
         image.uniform_buffer_size = 0;
+        image.vertex_buffer_size = 0;
 
         VkCommandBufferBeginInfo begin_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -643,24 +649,26 @@ namespace imv {
 
         VkDescriptorSetLayout descriptor_set_layout;
         VkPipelineLayout pipeline_layout;
+        
+        vector<VkDescriptorSetLayoutBinding> descriptor_set_layout_binding {
+            {
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            },
+        };
+
+        for (auto& _: info.images) {
+            descriptor_set_layout_binding.push_back({
+                .binding = uint32_t(descriptor_set_layout_binding.size()),
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+            });
+        }
+        
         {
-            vector<VkDescriptorSetLayoutBinding> descriptor_set_layout_binding {
-                {
-                    .binding = 0,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .descriptorCount = 1,
-                    .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-                },
-            };
-            for (auto& _: info.images) {
-                descriptor_set_layout_binding.push_back({
-                    .binding = uint32_t(descriptor_set_layout_binding.size()),
-                    .descriptorType = 
-                        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .descriptorCount = 1,
-                    .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-                });
-            }
             VkDescriptorSetLayoutCreateInfo descriptor_create_info = {
                 .sType = 
                     VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -696,25 +704,22 @@ namespace imv {
         }
 
         if (!image.uniform_buffer) {
-            {
-                VkBufferCreateInfo create_info {
-                    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                    .size = image.uniform_buffer_capacity,
-                    .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                };
-                VmaAllocationCreateInfo allocation_create_info {
-                    .flags = 
-                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-                    .usage = VMA_MEMORY_USAGE_AUTO,
-                };
-                check(vmaCreateBuffer(
-                    r.allocator.get(), &create_info, &allocation_create_info,
-                    out_ptr(image.uniform_buffer), 
-                    out_ptr(image.uniform_allocation),
-                    nullptr
-                ));
-            }
+            VkBufferCreateInfo create_info {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .size = image.uniform_buffer_capacity,
+                .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            };
+            VmaAllocationCreateInfo allocation_create_info {
+                .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .usage = VMA_MEMORY_USAGE_AUTO,
+            };
+            check(vmaCreateBuffer(
+                r.allocator.get(), &create_info, &allocation_create_info,
+                out_ptr(image.uniform_buffer), 
+                out_ptr(image.uniform_allocation),
+                nullptr
+            ));
         }
 
         size_t first_image_view = image.image_views.size();
@@ -842,12 +847,61 @@ namespace imv {
             r.pipeline_shader_stages[i] = create_info;
         }
 
+        if (!image.vertex_buffer) {
+            VkBufferCreateInfo create_info {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .size = image.vertex_buffer_capacity,
+                .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            };
+            VmaAllocationCreateInfo allocation_create_info {
+                .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .usage = VMA_MEMORY_USAGE_AUTO,
+            };
+            check(vmaCreateBuffer(
+                r.allocator.get(), &create_info, &allocation_create_info,
+                out_ptr(image.vertex_buffer), 
+                out_ptr(image.vertex_allocation),
+                nullptr
+            ));
+        }
+
+        vector<VkVertexInputBindingDescription> 
+            vertex_input_binding_descriptions;
+        vector<VkVertexInputAttributeDescription> 
+            vertex_input_attribute_description;
+
+        vector<VkBuffer> vertex_buffers;
+        vector<VkDeviceSize> vertex_offsets;
+        for (const auto& binding : info.vertex_input_bindings) {
+            vertex_input_binding_descriptions.push_back(binding.description);
+            check(vmaCopyMemoryToAllocation(
+                r.allocator.get(), binding.buffer_source_pointer, 
+                image.vertex_allocation.get(), 
+                image.vertex_buffer_size, binding.buffer_source_size
+            ));
+            vertex_buffers.push_back(image.vertex_buffer.get());
+            vertex_offsets.push_back(image.vertex_buffer_size);
+            image.vertex_buffer_size += binding.buffer_source_size;
+            
+            for (const auto& attribute : binding.attributes) {
+                vertex_input_attribute_description.push_back(attribute);
+            }
+        }
+
         VkPipelineVertexInputStateCreateInfo pipeline_vertex_input_state = {
             .sType = 
                 VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .vertexBindingDescriptionCount =
+                uint32_t(size(vertex_input_binding_descriptions)),
+            .pVertexBindingDescriptions = 
+                data(vertex_input_binding_descriptions),
+            .vertexAttributeDescriptionCount =
+                uint32_t(size(vertex_input_attribute_description)),
+            .pVertexAttributeDescriptions = 
+                data(vertex_input_attribute_description),
         };
-        VkPipelineInputAssemblyStateCreateInfo 
-        pipeline_input_assembly_state = {
+        VkPipelineInputAssemblyStateCreateInfo pipeline_input_assembly_state = {
             .sType =
                 VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
             .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
@@ -1009,6 +1063,11 @@ namespace imv {
         vkCmdBindPipeline(
             image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             image.pipelines.back().get()
+        );
+
+        vkCmdBindVertexBuffers(
+            image.command_buffer, 0, size(info.vertex_input_bindings), 
+            data(vertex_buffers), data(vertex_offsets)
         );
 
         auto descriptor_set = image.descriptor_sets.back().get();
