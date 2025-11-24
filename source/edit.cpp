@@ -1,5 +1,8 @@
+#include <memory>
+#include <vector>
 #include <immediate_mode_vulkan/edit.h>
 #include <immediate_mode_vulkan/draw.h>
+#include "glm/vector_relational.hpp"
 #include "renderer.h"
 
 using namespace std;
@@ -7,9 +10,59 @@ using namespace glm;
 
 namespace imv {
 
+    struct editor_data {
+        vector<vec2> points;
+        inputs previous_inputs{}, current_inputs{};
+        size_t selected_point = 0;
+        size_t points_size = 0;
+    };
+
+    editor::editor() {
+        d = make_unique<editor_data>();
+    }
+
+    editor::~editor() {}
+
+    editor* global_editor;
+
+    void set_inputs(const inputs& i) {
+        auto& e = *global_editor->d;
+        e.previous_inputs = exchange(e.current_inputs, i);
+        e.points_size = 0;
+    }
+
     vec2 edit(vec2& position) {
+        auto& e = *global_editor->d;
+        vec2 scale = 2.f / vec2{ 
+            get_surface_size().width, get_surface_size().height 
+        };
+
+        vec2 mouse = { e.current_inputs.mouse.x, e.current_inputs.mouse.y };
+        mouse *= scale;
+        mouse -= 1;
+
+        if (e.current_inputs.mouse.primary) {
+            if (!e.previous_inputs.mouse.primary) {
+                if (all(lessThan(abs(position - mouse), 10.f * scale))) {
+                    e.selected_point = e.points_size;
+                }
+            }
+            if (e.selected_point == e.points_size) {
+                position += (
+                    vec2{ e.current_inputs.mouse.x, e.current_inputs.mouse.y } -
+                    vec2{ e.previous_inputs.mouse.x, e.previous_inputs.mouse.y } 
+                ) * scale;
+            }
+        } else {
+            e.selected_point = -1;
+        }
+
+        e.points_size++;
+
         // TODO: draw widget on top of other elements
-        // TODO: allow grabbing
+        // Either by deferring draw, drawing into separate command buffer,
+        // drawing into separate frame buffer, or drawing with high z value
+        // immediate is better than deferred
         vec2 positions[] = {
             {20, -1}, {20, 1}, {100, -1}, {100, 1}, 
             {100, -10}, {100, 10}, {130, 0},
@@ -77,9 +130,7 @@ namespace imv {
             },
             .uniform_source = uniforms{ 
                 .position = position, 
-                .scale = 2.f / vec2{ 
-                    get_surface_size().width, get_surface_size().height 
-                },
+                .scale = scale,
             },
             .vertex_count = size(positions),
         });

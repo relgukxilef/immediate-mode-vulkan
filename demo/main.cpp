@@ -105,13 +105,26 @@ int main() {
         instance.get(), window.get(), nullptr, out_ptr(surface)
     ));
 
-    imv::renderer r(instance.get(), surface.get());
-    imv::global_renderer = &r;
+    imv::renderer renderer(instance.get(), surface.get());
+    imv::global_renderer = &renderer;
+    imv::editor editor;
+    imv::global_editor = &editor;
 
-    vec2 position = { -0.2, 0.0 };
+    vec2 positions[2] = {{ -0.2, 0.0 }, { 0.2, 0.0 }};
     
     while (!glfwWindowShouldClose(window.get())) {
         imv::wait_frame();
+        double x, y;
+        glfwGetCursorPos(window.get(), &x, &y);
+        imv::set_inputs({
+            .mouse = {
+                .x = float(x),
+                .y = float(y),
+                .primary = 
+                    glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) == 
+                    GLFW_PRESS,
+            }
+        });
 
         struct uniforms {
             glm::vec2 position;
@@ -128,7 +141,7 @@ int main() {
                 }, 
             },
             .images = { { .file_name = "demo/1.png.ktx", }, },
-            .uniform_source = uniforms{ .position = imv::edit(position)},
+            .uniform_source = uniforms{ .position = imv::edit(positions[0] ) },
             .vertex_count = 4,
         });
 
@@ -143,7 +156,7 @@ int main() {
                 }, 
             },
             .images = { { .file_name = "demo/2.png.ktx", }, },
-            .uniform_source = uniforms{ .position = { 0.2, 0.0 }},
+            .uniform_source = uniforms{ .position = imv::edit(positions[1] ) },
             .vertex_count = 4,
         });
 
