@@ -67,6 +67,8 @@ add_library(
     include/immediate_mode_vulkan/resources/ktx_resources.h
     include/immediate_mode_vulkan/edit.h
     source/edit.cpp
+    include/immediate_mode_vulkan/globals.h
+    source/globals.cpp
 )
 
 target_link_libraries(
