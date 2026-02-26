@@ -19,7 +19,6 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/glfw/glfw.git
     GIT_TAG 3.4
 )
-FetchContent_MakeAvailable(glfw)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -27,14 +26,12 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/g-truc/glm.git
     GIT_TAG 1.0.1
 )
-FetchContent_MakeAvailable(glm)
 
 FetchContent_Declare(
     VulkanHeaders
     GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
     GIT_TAG v1.4.307
 )
-FetchContent_MakeAvailable(VulkanHeaders)
 
 FetchContent_Declare(
     VulkanMemoryAllocator
@@ -42,7 +39,6 @@ FetchContent_Declare(
         https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
     GIT_TAG v3.3.0
 )
-FetchContent_MakeAvailable(VulkanMemoryAllocator)
 
 set(KTX_FEATURE_TESTS OFF)
 set(KTX_FEATURE_TOOLS ON)
@@ -52,7 +48,15 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
     GIT_TAG v4.4.2
 )
-FetchContent_MakeAvailable(KTX)
+
+FetchContent_Declare(json
+    GIT_REPOSITORY https://github.com/nlohmann/json
+    GIT_TAG v3.12.0
+)
+
+FetchContent_MakeAvailable(
+    glfw glm VulkanHeaders VulkanMemoryAllocator KTX json
+)
 
 find_package(Vulkan 1.1)
 
@@ -74,7 +78,7 @@ add_library(
 target_link_libraries(
     ImmediateModeVulkan
     gdi32 user32 kernel32 Vulkan::Vulkan glfw Vulkan::Headers glm
-    VulkanMemoryAllocator ktx_read
+    VulkanMemoryAllocator ktx_read nlohmann_json::nlohmann_json
 )
 
 target_include_directories(
