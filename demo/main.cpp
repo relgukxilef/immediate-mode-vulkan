@@ -1,6 +1,12 @@
+#include "glm/common.hpp"
+#include "glm/exponential.hpp"
+#include "glm/ext/matrix_projection.hpp"
+#include "glm/geometric.hpp"
+#include "glm/trigonometric.hpp"
 #include <iostream>
 #include <cassert>
 #include <memory>
+#include <numbers>
 
 #define GLFW_INCLUDE_VULKAN
 #define GLFW_VULKAN_STATIC
@@ -40,6 +46,50 @@ struct glfw_window_deleter {
 };
 
 using unique_window = unique_ptr<GLFWwindow, glfw_window_deleter>;
+
+struct input {
+    float steering = 0, acceleration = 0;
+};
+
+const float time_delta = 1e-3f;
+
+vec2 clamp_length(vec2 x, float max) {
+    float length_squared = glm::dot(x, x);
+    if (length_squared < max * max)
+        return x;
+    return x * glm::inversesqrt(length_squared) * max;
+}
+
+vec2 project(vec2 x, vec2 target) {
+    return target * glm::dot(x, target);
+}
+
+struct car_t {
+    vec2 position = {};
+    vec2 velocity = {};
+    float heading = 0.f;
+    
+    void update(input input) {
+        input.steering = glm::clamp(input.steering, -1.f, 1.f);
+        input.acceleration = glm::clamp(input.acceleration, -1.f, 1.f);
+
+        float speed = glm::length(velocity);
+        heading -= input.steering * speed * time_delta;
+
+        vec2 forward = { sin(heading), cos(heading) };
+
+        float forward_speed = glm::dot(velocity, forward);
+
+        if (input.acceleration < 0 && forward_speed > 0)
+            input.acceleration *= 8;
+
+        velocity += time_delta / (1.f + speed) * input.acceleration * forward;
+
+        velocity = forward * glm::length(velocity);
+        
+        position += velocity * time_delta;
+    }
+};
 
 int main() {
     unique_glfw glfw;
@@ -107,15 +157,40 @@ int main() {
 
     imv::renderer r(instance.get(), surface.get());
     imv::global_renderer = &r;
-    
+
+    car_t car;
+    float last_update = glfwGetTime();
+
     while (!glfwWindowShouldClose(window.get())) {
         imv::wait_frame();
 
-        struct {
-            float time;
-        } uniforms;
+        input input;
+        if (glfwGetKey(window.get(), GLFW_KEY_UP))
+            input.acceleration++;
+        if (glfwGetKey(window.get(), GLFW_KEY_DOWN))
+            input.acceleration--;
+        if (glfwGetKey(window.get(), GLFW_KEY_RIGHT))
+            input.steering++;
+        if (glfwGetKey(window.get(), GLFW_KEY_LEFT))
+            input.steering--;
 
-        uniforms.time = float(glfwGetTime());
+        while (last_update < glfwGetTime()) {
+            last_update += time_delta;
+            car.update(input);
+        }
+
+        int width, height;
+        glfwGetWindowSize(window.get(), &width, &height);
+
+        struct {
+            vec2 position;
+            float time;
+            float window_width;
+        } uniforms { 
+            .position = car.position,
+            .time = float(glfwGetTime()),
+            .window_width = float(width) / height,
+        };
         
         vec2 positions[] = { // and texture coordinates
             vec2(-1, -1), vec2(0, 0),
@@ -124,74 +199,58 @@ int main() {
             vec2(1, 1), vec2(1, 1),
         };
         vec3 colors[] = {
-            vec3(1, 1, 0),
-            vec3(1, 0, 1),
-            vec3(0, 1, 1),
-            vec3(0, 1, 0),
+            vec3(1, 1, 1),
+            vec3(1, 1, 1),
+            vec3(1, 1, 1),
+            vec3(1, 1, 1),
         };
 
-        for (auto i = 0u; i < 1000; i++) {
-            imv::draw({
-                .stages = {
-                    { 
-                        .code_file_name = "demo/vertex.glsl.spv",
-                        .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
-                    }, { 
-                        .code_file_name = "demo/fragment.glsl.spv",
-                        .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
-                    }, 
-                },
-                .vertex_input_bindings = {
-                    {
-                        .buffer_source_pointer = &positions,
-                        .buffer_source_size = sizeof(positions),
-                        .description = {
-                            .stride = 2 * sizeof(vec2),
-                            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-                        }, 
-                        .attributes = {
-                            { 0, 0, VK_FORMAT_R32G32_SFLOAT, },
-                            { 1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(vec2) },
-                        },
-                    }, {
-                        .buffer_source_pointer = &colors,
-                        .buffer_source_size = sizeof(colors),
-                        .description = {
-                            .binding = 1,
-                            .stride = sizeof(vec3),
-                            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-                        }, 
-                        .attributes = {
-                            { 2, 1, VK_FORMAT_R32G32B32_SFLOAT, },
-                        },
-                    },
-                },
-                .images = {
-                    {
-                        .file_name = "demo/1.png.ktx",
-                        .sampler_info = {
-                            .magFilter = VK_FILTER_LINEAR,
-                            .minFilter = VK_FILTER_LINEAR,
-                            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                            .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                            .anisotropyEnable = VK_FALSE,
-                            .minLod = 0.0,
-                            .maxLod = VK_LOD_CLAMP_NONE,
-                        }
-                    }, {
-                        .file_name = "demo/2.png.ktx",
-                    }, 
-                },
-                .uniform_source_pointer = &uniforms,
-                .uniform_source_size = sizeof(uniforms),
-                .vertex_count = 4,
-            });
-            
-            uniforms.time += 0.5f;
-        }
+        auto stages = {
+            imv::stage_info{ 
+                .code_file_name = "demo/vertex.glsl.spv",
+                .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
+            }, { 
+                .code_file_name = "demo/fragment.glsl.spv",
+                .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
+            }, 
+        };
 
+        auto bindings = {
+            imv::vertex_binding_info{
+                .buffer_source_pointer = &positions,
+                .buffer_source_size = sizeof(positions),
+                .description = {
+                    .stride = 2 * sizeof(vec2),
+                    .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+                }, 
+                .attributes = {
+                    { 0, 0, VK_FORMAT_R32G32_SFLOAT, },
+                    { 1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(vec2) },
+                },
+            }, {
+                .buffer_source_pointer = &colors,
+                .buffer_source_size = sizeof(colors),
+                .description = {
+                    .binding = 1,
+                    .stride = sizeof(vec3),
+                    .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+                }, 
+                .attributes = {
+                    { 2, 1, VK_FORMAT_R32G32B32_SFLOAT, },
+                },
+            },
+        };
+
+        imv::draw({
+            .stages = stages,
+            .vertex_input_bindings = bindings,
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = 4,
+        });
+        
+        // TODO: draw car
+        
         imv::submit();
         
         glfwPollEvents();
