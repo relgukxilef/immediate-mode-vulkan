@@ -1,6 +1,9 @@
 #include "glm/common.hpp"
 #include "glm/exponential.hpp"
+#include "glm/ext/matrix_clip_space.hpp"
+#include "glm/ext/matrix_float3x2.hpp"
 #include "glm/ext/matrix_projection.hpp"
+#include "glm/ext/matrix_transform.hpp"
 #include "glm/geometric.hpp"
 #include "glm/trigonometric.hpp"
 #include <iostream>
@@ -24,6 +27,8 @@ using std::unique_ptr;
 using std::out_ptr;
 using glm::vec2;
 using glm::vec3;
+using glm::vec4;
+using glm::mat4;
 
 void glfw_check(int code) {
     if (code == GLFW_TRUE) {
@@ -51,7 +56,7 @@ struct input {
     float steering = 0, acceleration = 0;
 };
 
-const float time_delta = 1e-3f;
+const float time_delta = 1e-2f;
 
 vec2 clamp_length(vec2 x, float max) {
     float length_squared = glm::dot(x, x);
@@ -78,6 +83,8 @@ struct car_t {
 
         vec2 forward = { sin(heading), cos(heading) };
 
+        velocity = forward * glm::length(velocity);
+        
         float forward_speed = glm::dot(velocity, forward);
 
         if (input.acceleration < 0 && forward_speed > 0)
@@ -85,8 +92,6 @@ struct car_t {
 
         velocity += time_delta / (1.f + speed) * input.acceleration * forward;
 
-        velocity = forward * glm::length(velocity);
-        
         position += velocity * time_delta;
     }
 };
@@ -182,14 +187,15 @@ int main() {
         int width, height;
         glfwGetWindowSize(window.get(), &width, &height);
 
-        struct {
-            vec2 position;
-            float time;
-            float window_width;
-        } uniforms { 
-            .position = car.position,
-            .time = float(glfwGetTime()),
-            .window_width = float(width) / height,
+        vec2 forward = { sin(car.heading), cos(car.heading) };
+
+        mat4 view_matrix = 
+            glm::infinitePerspective(1.5f, (float)width / height, 0.1f) *
+            glm::lookAt(vec3{-1, 0, 1}, vec3(car.position, 0), vec3{0, 0, -1});
+
+        struct uniforms_t {
+            mat4 matrix;
+            vec4 colors;
         };
         
         vec2 positions[] = { // and texture coordinates
@@ -197,12 +203,6 @@ int main() {
             vec2(1, -1), vec2(1, 0),
             vec2(-1, 1), vec2(0, 1),
             vec2(1, 1), vec2(1, 1),
-        };
-        vec3 colors[] = {
-            vec3(1, 1, 1),
-            vec3(1, 1, 1),
-            vec3(1, 1, 1),
-            vec3(1, 1, 1),
         };
 
         auto stages = {
@@ -227,18 +227,14 @@ int main() {
                     { 0, 0, VK_FORMAT_R32G32_SFLOAT, },
                     { 1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(vec2) },
                 },
-            }, {
-                .buffer_source_pointer = &colors,
-                .buffer_source_size = sizeof(colors),
-                .description = {
-                    .binding = 1,
-                    .stride = sizeof(vec3),
-                    .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-                }, 
-                .attributes = {
-                    { 2, 1, VK_FORMAT_R32G32B32_SFLOAT, },
-                },
             },
+        };
+
+        mat4 model_matrix = glm::scale(mat4(1.f), vec3(5, 5, 1));
+
+        uniforms_t uniforms{
+            .matrix = view_matrix * model_matrix,
+            .colors = vec4(1),
         };
 
         imv::draw({
@@ -248,8 +244,21 @@ int main() {
             .uniform_source_size = sizeof(uniforms),
             .vertex_count = 4,
         });
+
+        model_matrix = glm::scale(glm::rotate(glm::translate(mat4(1.0), vec3(car.position, 0)), -car.heading, vec3{0, 0, 1}), vec3(0.1, 0.2, 1));
         
-        // TODO: draw car
+        uniforms = {
+            .matrix = view_matrix * model_matrix,
+            .colors = vec4(0.5),
+        };
+
+        imv::draw({
+            .stages = stages,
+            .vertex_input_bindings = bindings,
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = 4,
+        });
         
         imv::submit();
         
