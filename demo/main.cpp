@@ -90,7 +90,8 @@ struct car_t {
         if (input.acceleration < 0 && forward_speed > 0)
             input.acceleration *= 8;
 
-        velocity += time_delta / (1.f + speed) * input.acceleration * forward;
+        velocity += 
+            time_delta / (1.f + speed) * input.acceleration * forward * 4.f;
 
         position += velocity * time_delta;
     }
@@ -164,6 +165,7 @@ int main() {
     imv::global_renderer = &r;
 
     car_t car;
+    vec2 camera_position = {}, camera_velocity = {};
     float last_update = glfwGetTime();
 
     while (!glfwWindowShouldClose(window.get())) {
@@ -182,16 +184,25 @@ int main() {
         while (last_update < glfwGetTime()) {
             last_update += time_delta;
             car.update(input);
+
+            vec2 forward = { sin(car.heading), cos(car.heading) };
+
+            camera_position += camera_velocity * time_delta;
+            camera_position += (
+                car.position - forward - camera_position
+            ) * time_delta;
+            camera_velocity += 
+                time_delta * 3 * (car.velocity - camera_velocity);
         }
 
         int width, height;
         glfwGetWindowSize(window.get(), &width, &height);
 
-        vec2 forward = { sin(car.heading), cos(car.heading) };
-
         mat4 view_matrix = 
             glm::infinitePerspective(1.5f, (float)width / height, 0.1f) *
-            glm::lookAt(vec3{-1, 0, 1}, vec3(car.position, 0), vec3{0, 0, -1});
+            glm::lookAt(
+                vec3{camera_position, 1}, vec3(car.position, 0), vec3{0, 0, -1}
+            );
 
         struct uniforms_t {
             mat4 matrix;
@@ -230,7 +241,7 @@ int main() {
             },
         };
 
-        mat4 model_matrix = glm::scale(mat4(1.f), vec3(5, 5, 1));
+        mat4 model_matrix = glm::scale(mat4(1.f), vec3(40, 40, 1));
 
         uniforms_t uniforms{
             .matrix = view_matrix * model_matrix,
