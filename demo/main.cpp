@@ -1,15 +1,5 @@
-#include "glm/common.hpp"
-#include "glm/exponential.hpp"
-#include "glm/ext/matrix_clip_space.hpp"
-#include "glm/ext/matrix_float3x2.hpp"
-#include "glm/ext/matrix_projection.hpp"
-#include "glm/ext/matrix_transform.hpp"
-#include "glm/geometric.hpp"
-#include "glm/trigonometric.hpp"
-#include <iostream>
 #include <cassert>
 #include <memory>
-#include <numbers>
 
 #define GLFW_INCLUDE_VULKAN
 #define GLFW_VULKAN_STATIC
@@ -25,10 +15,7 @@
 
 using std::unique_ptr;
 using std::out_ptr;
-using glm::vec2;
-using glm::vec3;
-using glm::vec4;
-using glm::mat4;
+using namespace glm;
 
 void glfw_check(int code) {
     if (code == GLFW_TRUE) {
@@ -69,21 +56,40 @@ vec2 project(vec2 x, vec2 target) {
     return target * glm::dot(x, target);
 }
 
+float move_towards(float x, float target, float distance) {
+    return x + clamp(target - x, -distance, distance);
+}
+
+float steering_speed = 0.5f;
+float turning_speed = 0.4f;
+float acceleration = 4.0;
+float camera_speed = 10;
+float camera_acceleration = 0;
+
 struct car_t {
     vec2 position = {};
     vec2 velocity = {};
     float heading = 0.f;
+    float steering = 0.f;
     
     void update(input input) {
         input.steering = glm::clamp(input.steering, -1.f, 1.f);
         input.acceleration = glm::clamp(input.acceleration, -1.f, 1.f);
 
         float speed = glm::length(velocity);
-        heading -= input.steering * speed * time_delta;
+
+        steering = move_towards(
+            steering, input.steering, speed * time_delta * steering_speed
+        );
+        
+        float heading_change = 
+            speed * time_delta * steering * turning_speed;
+        heading -= heading_change;
 
         vec2 forward = { sin(heading), cos(heading) };
 
-        velocity = forward * glm::length(velocity);
+        velocity = 
+            mat2(rotate(mat4(1.0), heading_change, {0, 0, 1})) * velocity;
         
         float forward_speed = glm::dot(velocity, forward);
 
@@ -91,7 +97,8 @@ struct car_t {
             input.acceleration *= 8;
 
         velocity += 
-            time_delta / (1.f + speed) * input.acceleration * forward * 4.f;
+            acceleration * time_delta / 
+            (1.f + speed) * input.acceleration * forward * 4.f;
 
         position += velocity * time_delta;
     }
@@ -190,9 +197,10 @@ int main() {
             camera_position += camera_velocity * time_delta;
             camera_position += (
                 car.position - forward - camera_position
-            ) * time_delta;
+            ) * time_delta * camera_speed;
             camera_velocity += 
-                time_delta * 3 * (car.velocity - camera_velocity);
+                time_delta * camera_acceleration * 
+                (car.velocity - camera_velocity);
         }
 
         int width, height;
