@@ -1,5 +1,9 @@
+#include "glm/ext/matrix_transform.hpp"
 #include <cassert>
+#include <limits>
 #include <memory>
+#include <numbers>
+#include <vector>
 
 #define GLFW_INCLUDE_VULKAN
 #define GLFW_VULKAN_STATIC
@@ -61,10 +65,39 @@ float move_towards(float x, float target, float distance) {
 }
 
 float steering_speed = 0.5f;
-float turning_speed = 0.4f;
-float acceleration = 4.0;
+float turning_speed = 0.04f;
+float acceleration = 40.0;
 float camera_speed = 10;
 float camera_acceleration = 0;
+
+struct track {
+    std::vector<vec2> strip;
+    vec2 end = {}, forward = {0, 1};
+    void append_straight(float length, float width) {
+        vec2 normal = {forward.y, -forward.x};
+        strip.push_back(end + width * normal);
+        strip.push_back(end - width * normal);
+        end += forward * length;
+    }
+    void append_turn(float radius, float width) {
+        int resolution = 8;
+        mat2 rotation = rotate(
+            mat4(1), float(std::numbers::pi) / resolution * sign(radius) / 2, 
+            {0, 0, 1}
+        );
+        vec2 normal = {forward.y, -forward.x};
+        vec2 left = (radius + width) * normal, right = (radius - width) * normal;
+        vec2 center = end - normal * radius;
+        for (auto i = 0u; i < resolution; i++) {
+            strip.push_back(center + left);
+            strip.push_back(center + right);
+            left = rotation * left;
+            right = rotation * right;
+        }
+        end = center + forward * abs(radius);
+        forward = -normal * sign(radius);
+    }
+};
 
 struct car_t {
     vec2 position = {};
@@ -171,6 +204,18 @@ int main() {
     imv::renderer r(instance.get(), surface.get());
     imv::global_renderer = &r;
 
+    track track;
+
+    track.append_straight(80, 20);
+    track.append_turn(40, 20);
+    track.append_straight(40, 20);
+    track.append_turn(-40, 20);
+    track.append_straight(40, 20);
+    track.append_straight(10, 10);
+    track.append_turn(-40, 10);
+    track.append_straight(10, 10);
+    track.append_straight(80, 20);
+
     car_t car;
     vec2 camera_position = {}, camera_velocity = {};
     float last_update = glfwGetTime();
@@ -196,7 +241,7 @@ int main() {
 
             camera_position += camera_velocity * time_delta;
             camera_position += (
-                car.position - forward - camera_position
+                car.position - forward * 10.f - camera_position
             ) * time_delta * camera_speed;
             camera_velocity += 
                 time_delta * camera_acceleration * 
@@ -209,7 +254,8 @@ int main() {
         mat4 view_matrix = 
             glm::infinitePerspective(1.5f, (float)width / height, 0.1f) *
             glm::lookAt(
-                vec3{camera_position, 1}, vec3(car.position, 0), vec3{0, 0, -1}
+                vec3{camera_position, 10}, vec3(car.position, 0), 
+                vec3{0, 0, -1}
             );
 
         struct uniforms_t {
@@ -249,7 +295,7 @@ int main() {
             },
         };
 
-        mat4 model_matrix = glm::scale(mat4(1.f), vec3(40, 40, 1));
+        mat4 model_matrix = glm::scale(mat4(1.f), vec3(1, 1, 1));
 
         uniforms_t uniforms{
             .matrix = view_matrix * model_matrix,
@@ -258,13 +304,26 @@ int main() {
 
         imv::draw({
             .stages = stages,
-            .vertex_input_bindings = bindings,
+            .vertex_input_bindings = {
+                {
+                    .buffer_source_pointer = track.strip.data(),
+                    .buffer_source_size = sizeof(vec2) * track.strip.size(),
+                    .description = {
+                        .stride = sizeof(vec2),
+                        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+                    }, 
+                    .attributes = {
+                        { 0, 0, VK_FORMAT_R32G32_SFLOAT, },
+                        { 1, 0, VK_FORMAT_R32G32_SFLOAT, },
+                    },
+                },
+            },
             .uniform_source_pointer = &uniforms,
             .uniform_source_size = sizeof(uniforms),
-            .vertex_count = 4,
+            .vertex_count = (uint32_t)track.strip.size(),
         });
 
-        model_matrix = glm::scale(glm::rotate(glm::translate(mat4(1.0), vec3(car.position, 0)), -car.heading, vec3{0, 0, 1}), vec3(0.1, 0.2, 1));
+        model_matrix = glm::scale(glm::rotate(glm::translate(mat4(1.0), vec3(car.position, 0)), -car.heading, vec3{0, 0, 1}), vec3(1, 2, 1));
         
         uniforms = {
             .matrix = view_matrix * model_matrix,
