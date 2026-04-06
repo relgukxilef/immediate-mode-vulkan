@@ -1,6 +1,5 @@
 #include "glm/ext/matrix_transform.hpp"
 #include <cassert>
-#include <limits>
 #include <memory>
 #include <numbers>
 #include <vector>
@@ -70,6 +69,37 @@ float acceleration = 40.0;
 float camera_speed = 10;
 float camera_acceleration = 0;
 
+float line_side(vec2 a, vec2 b, vec2 point) {
+    b -= a;
+    point -= a;
+    return dot(vec2{b.y, -b.x}, point);
+}
+
+float line_distance(vec2 a, vec2 b, vec2 point) {
+    b -= a;
+    point -= a;
+    return line_side({}, normalize(b), point);
+}
+
+vec2 line_collide(vec2 a, vec2 b, vec2 point, float depth) {
+    b -= a;
+    vec2 local = point - a;
+    vec2 tangent = normalize(b);
+    vec2 normal = {tangent.y, -tangent.x};
+    float t = dot(tangent, local);
+    if (t < 0)
+        return point;
+    if (t > dot(tangent, b))
+        return point;
+    float s = dot(normal, local);
+    if (s < 0)
+        return point;
+    if (s > depth)
+        return point;
+
+    return a + tangent * t;
+}
+
 struct track {
     std::vector<vec2> strip;
     vec2 end = {}, forward = {0, 1};
@@ -82,7 +112,7 @@ struct track {
     void append_turn(float radius, float width) {
         int resolution = 8;
         mat2 rotation = rotate(
-            mat4(1), float(std::numbers::pi) / resolution * sign(radius) / 2, 
+            mat4(1), pi<float>() / resolution * sign(radius) / 2, 
             {0, 0, 1}
         );
         vec2 normal = {forward.y, -forward.x};
@@ -97,15 +127,28 @@ struct track {
         end = center + forward * abs(radius);
         forward = -normal * sign(radius);
     }
+    vec2 collide(vec2 point) {
+        vec2 a = strip[0], b = strip[1];
+        for (int i = 2; i < strip.size(); i+=2) {
+            vec2 c = strip[i], d = strip[i + 1];
+
+            point = line_collide(a, c, point, 2);
+            point = line_collide(d, b, point, 2);
+
+            a = c;
+            b = d;
+        }
+        return point;
+    }
 };
 
-struct car_t {
+struct car {
     vec2 position = {};
     vec2 velocity = {};
     float heading = 0.f;
     float steering = 0.f;
     
-    void update(input input) {
+    void update(input input, ::track& track) {
         input.steering = glm::clamp(input.steering, -1.f, 1.f);
         input.acceleration = glm::clamp(input.acceleration, -1.f, 1.f);
 
@@ -134,6 +177,17 @@ struct car_t {
             (1.f + speed) * input.acceleration * forward * 4.f;
 
         position += velocity * time_delta;
+
+        vec2 old_position = position;
+        position = track.collide(position);
+        vec2 normal = position - old_position;
+        if (normal != vec2()) {
+            vec2 tangent = normalize(vec2{normal.y, -normal.x});
+            velocity = project(velocity, tangent);
+            heading += (
+                fract((atan2(velocity.x, velocity.y) - heading) / pi<float>() + 0.5) - 0.5
+            ) * pi<float>();
+        }
     }
 };
 
@@ -214,9 +268,14 @@ int main() {
     track.append_straight(10, 10);
     track.append_turn(-40, 10);
     track.append_straight(10, 10);
-    track.append_straight(80, 20);
+    track.append_straight(150, 20);
+    track.append_turn(-80, 20);
+    track.append_straight(170, 20);
+    track.append_turn(-80, 20);
+    track.append_turn(-80, 20);
+    track.append_straight(0, 20);
 
-    car_t car;
+    car car;
     vec2 camera_position = {}, camera_velocity = {};
     float last_update = glfwGetTime();
 
@@ -235,7 +294,7 @@ int main() {
 
         while (last_update < glfwGetTime()) {
             last_update += time_delta;
-            car.update(input);
+            car.update(input, track);
 
             vec2 forward = { sin(car.heading), cos(car.heading) };
 
