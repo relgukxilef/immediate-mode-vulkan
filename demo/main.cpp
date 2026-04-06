@@ -46,7 +46,7 @@ struct input {
     float steering = 0, acceleration = 0;
 };
 
-const float time_delta = 1e-2f;
+const float time_delta = 0.5e-2f;
 
 vec2 clamp_length(vec2 x, float max) {
     float length_squared = glm::dot(x, x);
@@ -132,8 +132,8 @@ struct track {
         for (int i = 2; i < strip.size(); i+=2) {
             vec2 c = strip[i], d = strip[i + 1];
 
-            point = line_collide(a, c, point, 2);
-            point = line_collide(d, b, point, 2);
+            point = line_collide(a, c, point, 4);
+            point = line_collide(d, b, point, 4);
 
             a = c;
             b = d;
@@ -164,6 +164,8 @@ struct car {
 
         vec2 forward = { sin(heading), cos(heading) };
 
+        velocity = project(velocity, forward);
+
         velocity = 
             mat2(rotate(mat4(1.0), heading_change, {0, 0, 1})) * velocity;
         
@@ -178,16 +180,28 @@ struct car {
 
         position += velocity * time_delta;
 
-        vec2 old_position = position;
-        position = track.collide(position);
-        vec2 normal = position - old_position;
-        if (normal != vec2()) {
-            vec2 tangent = normalize(vec2{normal.y, -normal.x});
-            velocity = project(velocity, tangent);
-            heading += (
-                fract((atan2(velocity.x, velocity.y) - heading) / pi<float>() + 0.5) - 0.5
-            ) * pi<float>();
+        vec2 sum_push = {};
+        vec2 sum_rotation = {};
+        vec2 corners[] = {
+            {-1, -2}, {1, -2}, {1, 2}, {-1, 2}, 
+        };
+        for (auto corner : corners) {
+            corner = 
+                corner.x * vec2{forward.y, -forward.x} + corner.y * forward;
+            corner += position;
+            vec2 destination = track.collide(corner);
+            sum_push += destination - corner;
+            corner -= position;
+            destination -= position;
+            vec2 relative = {
+                dot({corner.y, -corner.x}, destination),
+                dot(corner, destination), 
+            };
+            sum_rotation += relative;
         }
+
+        position += sum_push / 4.f;
+        heading += atan2(sum_rotation.x, sum_rotation.y);
     }
 };
 
@@ -382,7 +396,13 @@ int main() {
             .vertex_count = (uint32_t)track.strip.size(),
         });
 
-        model_matrix = glm::scale(glm::rotate(glm::translate(mat4(1.0), vec3(car.position, 0)), -car.heading, vec3{0, 0, 1}), vec3(1, 2, 1));
+        model_matrix = glm::scale(
+            glm::rotate(
+                glm::translate(mat4(1.0), vec3(car.position, 0)), 
+                -car.heading, vec3{0, 0, 1}
+            ), 
+            vec3(1, 2, 1)
+        );
         
         uniforms = {
             .matrix = view_matrix * model_matrix,
