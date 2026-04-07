@@ -7,9 +7,10 @@ layout(location = 1) in vec3 vertex_color;
 layout(location = 0) out vec4 fragment_color;
 
 void main() {
-    vec2 tile = fract(vertex_source * 0.5);
+    vec2 tile = fract(vertex_source / 20);
     tile = abs(tile - 0.5) - 0.25;
     float color = tile.x * tile.y;
-    color = 0.5 + 0.5 * clamp(color / fwidth(color) * 2, -1, 1);
+    color = 0.9 + 0.2 * clamp(color / fwidth(color) * 2, -1, 1);
     fragment_color = vec4(color * vertex_color, 1);
+    fragment_color = pow(fragment_color, vec4(1 / 2.2));
 }
