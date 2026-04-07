@@ -346,6 +346,7 @@ int main() {
         struct uniforms_t {
             mat4 matrix;
             vec4 colors;
+            vec4 velocity;
         };
         
         vec2 positions[] = { // and texture coordinates
@@ -385,6 +386,7 @@ int main() {
         uniforms_t uniforms{
             .matrix = view_matrix * model_matrix,
             .colors = vec4(1),
+            .velocity = vec4(abs(car.velocity) / 60.f, 0, 0),
         };
 
         imv::draw({

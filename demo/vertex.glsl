@@ -4,6 +4,7 @@
 layout (std140, binding = 0) uniform uniforms_t {
     mat4 matrix;
     vec4 color;
+    vec4 velocity;
 } uniforms;
 
 layout (location = 0) in vec2 position;
