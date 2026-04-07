@@ -65,7 +65,8 @@ float move_towards(float x, float target, float distance) {
 
 float steering_speed = 0.5f;
 float turning_speed = 0.04f;
-float acceleration = 40.0;
+float acceleration = 300.0f;
+float break_strength = 1.5f;
 float camera_speed = 10;
 float camera_acceleration = 0;
 
@@ -172,11 +173,11 @@ struct car {
         float forward_speed = glm::dot(velocity, forward);
 
         if (input.acceleration < 0 && forward_speed > 0)
-            input.acceleration *= 8;
-
-        velocity += 
-            acceleration * time_delta / 
-            (1.f + speed) * input.acceleration * forward * 4.f;
+            velocity -= speed * break_strength * time_delta * forward;
+        else
+            velocity += 
+                acceleration * time_delta / 
+                (1.f + speed) * input.acceleration * forward;
 
         position += velocity * time_delta;
 
@@ -291,20 +292,31 @@ int main() {
 
     car car;
     vec2 camera_position = {}, camera_velocity = {};
-    float last_update = glfwGetTime();
+    float last_update = float(glfwGetTime());
+    float steering_limit = 1;
 
     while (!glfwWindowShouldClose(window.get())) {
         imv::wait_frame();
 
         input input;
+        
+        if (glfwGetKey(window.get(), GLFW_KEY_A))
+            steering_limit = 0.25;
+        if (glfwGetKey(window.get(), GLFW_KEY_S))
+            steering_limit = 0.5;
+        if (glfwGetKey(window.get(), GLFW_KEY_D))
+            steering_limit = 0.75;
+        if (glfwGetKey(window.get(), GLFW_KEY_F))
+            steering_limit = 1;
+
         if (glfwGetKey(window.get(), GLFW_KEY_UP))
             input.acceleration++;
         if (glfwGetKey(window.get(), GLFW_KEY_DOWN))
             input.acceleration--;
         if (glfwGetKey(window.get(), GLFW_KEY_RIGHT))
-            input.steering++;
+            input.steering += steering_limit;
         if (glfwGetKey(window.get(), GLFW_KEY_LEFT))
-            input.steering--;
+            input.steering -= steering_limit;
 
         while (last_update < glfwGetTime()) {
             last_update += time_delta;
