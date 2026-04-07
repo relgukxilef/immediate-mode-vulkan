@@ -1,4 +1,5 @@
 #include "glm/ext/matrix_transform.hpp"
+#include "glm/ext/quaternion_transform.hpp"
 #include <cassert>
 #include <memory>
 #include <numbers>
@@ -420,8 +421,28 @@ int main() {
         
         uniforms = {
             .matrix = view_matrix * model_matrix,
-            .colors = vec4(0.5),
+            .colors = vec4(0.1, 0.2, 1.0, 1.0),
         };
+
+        imv::draw({
+            .stages = stages,
+            .vertex_input_bindings = bindings,
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = 4,
+        });
+
+        uniforms = {
+            .matrix = mat4(1),
+            .colors = vec4(0.8, 0.05, 0.05, 1.0),
+        };
+        uniforms.matrix = scale(uniforms.matrix, {(float)height / width, 1, 1});
+        uniforms.matrix = translate(uniforms.matrix, {0.9, 0.8, 0.0});
+        uniforms.matrix = rotate(
+            uniforms.matrix, glm::exp(length(car.velocity * 0.015f)), {0, 0, 1}
+        );
+        uniforms.matrix = scale(uniforms.matrix, {0.01, 0.1, 1});
+        uniforms.matrix = translate(uniforms.matrix, {0.0, 1, 0.0});
 
         imv::draw({
             .stages = stages,
