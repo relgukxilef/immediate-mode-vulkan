@@ -172,8 +172,8 @@ struct car {
         velocity = 
             mat2(rotate(mat4(1.0), heading_change, {0, 0, 1})) * velocity;
         
-        if (input.acceleration < 0 && forward_speed > 1)
-            velocity -= speed * break_strength * time_delta * forward;
+        if (sign(input.acceleration) * forward_speed < -2)
+            velocity -= forward_speed * break_strength * time_delta * forward;
         else
             velocity += 
                 acceleration * (1 - abs(steering)) * time_delta / 
