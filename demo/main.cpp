@@ -1,8 +1,6 @@
 #include "glm/ext/matrix_transform.hpp"
-#include "glm/ext/quaternion_transform.hpp"
 #include <cassert>
 #include <memory>
-#include <numbers>
 #include <vector>
 
 #define GLFW_INCLUDE_VULKAN
@@ -66,7 +64,7 @@ float move_towards(float x, float target, float distance) {
 
 float steering_speed = 0.5f;
 float turning_speed = 0.04f;
-float acceleration = 300.0f;
+float acceleration = 400.0f;
 float break_strength = 1.5f;
 float camera_speed = 10;
 float camera_acceleration = 0;
@@ -177,7 +175,7 @@ struct car {
             velocity -= speed * break_strength * time_delta * forward;
         else
             velocity += 
-                acceleration * time_delta / 
+                acceleration * (1 - abs(steering)) * time_delta / 
                 (1.f + speed) * input.acceleration * forward;
 
         position += velocity * time_delta;
