@@ -1,5 +1,4 @@
 #include "glm/ext/matrix_transform.hpp"
-#include "glm/ext/quaternion_geometric.hpp"
 #include <cassert>
 #include <memory>
 #include <vector>
@@ -176,7 +175,7 @@ struct car {
             velocity -= forward_speed * break_strength * time_delta * forward;
         else
             velocity += 
-                acceleration * (1 - abs(steering)) * time_delta / 
+                acceleration * (1 - 0.5f * abs(steering)) * time_delta / 
                 (1.f + speed) * input.acceleration * forward;
 
         position += velocity * time_delta;
