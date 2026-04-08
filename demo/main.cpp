@@ -157,21 +157,21 @@ struct car {
         steering = move_towards(
             steering, input.steering, speed * time_delta * steering_speed
         );
-        
-        float heading_change = 
-            speed * time_delta * steering * turning_speed;
-        heading -= heading_change;
 
         vec2 forward = { sin(heading), cos(heading) };
 
         velocity = project(velocity, forward);
+        
+        float forward_speed = glm::dot(velocity, forward);
+
+        float heading_change = 
+            forward_speed * time_delta * steering * turning_speed;
+        heading -= heading_change;
 
         velocity = 
             mat2(rotate(mat4(1.0), heading_change, {0, 0, 1})) * velocity;
         
-        float forward_speed = glm::dot(velocity, forward);
-
-        if (input.acceleration < 0 && forward_speed > 0)
+        if (input.acceleration < 0 && forward_speed > 1)
             velocity -= speed * break_strength * time_delta * forward;
         else
             velocity += 
