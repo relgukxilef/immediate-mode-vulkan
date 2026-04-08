@@ -1,4 +1,5 @@
 #include "glm/ext/matrix_transform.hpp"
+#include "glm/ext/quaternion_geometric.hpp"
 #include <cassert>
 #include <memory>
 #include <vector>
@@ -202,6 +203,9 @@ struct car {
 
         position += sum_push / 4.f;
         heading += atan2(sum_rotation.x, sum_rotation.y);
+        // Maybe rotate velocity on shallow collisions to account for 
+        // polygon limit in track
+        velocity -= project(velocity, sum_push / (length(sum_push) + 1e-3f));
     }
 };
 
