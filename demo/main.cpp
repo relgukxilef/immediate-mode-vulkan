@@ -62,6 +62,10 @@ float move_towards(float x, float target, float distance) {
     return x + clamp(target - x, -distance, distance);
 }
 
+vec2 smooth_normalize(vec2 x) {
+    return x / (length(x) + 1e-3f);
+}
+
 float steering_speed = 0.5f;
 float turning_speed = 0.04f;
 float acceleration = 400.0f;
@@ -201,10 +205,16 @@ struct car {
         }
 
         position += sum_push / 4.f;
-        heading += atan2(sum_rotation.x, sum_rotation.y);
-        // Maybe rotate velocity on shallow collisions to account for 
-        // polygon limit in track
-        velocity -= project(velocity, sum_push / (length(sum_push) + 1e-3f));
+        heading_change = -atan2(sum_rotation.x, sum_rotation.y);
+        heading -= heading_change;
+        // Rotate velocity on shallow collisions to account for polygon limit 
+        // in track
+        float max_angle = pi<float>() / 16;
+        velocity = 
+            mat2(rotate(mat4(1.0), heading_change, {0, 0, 1})) * velocity;
+        heading_change = 
+            asin(dot(smooth_normalize(velocity), smooth_normalize(sum_push)));
+        velocity *= cos(max(abs(heading_change) - max_angle, 0.f));
     }
 };
 
