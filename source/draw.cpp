@@ -13,6 +13,14 @@
 
 #include <ktx.h>
 
+// Definition for platforms where it is not made available by ktx (EMSCRIPTEN)
+KTX_error_code ktxVulkanDeviceInfo_Construct(
+    ktxVulkanDeviceInfo*,
+    VkPhysicalDevice, VkDevice,
+    VkQueue, VkCommandPool,
+    const VkAllocationCallbacks*
+);
+
 using namespace std;
 
 namespace imv {
@@ -745,7 +753,7 @@ namespace imv {
                     out_ptr(texture)
                 );
                 // TODO: check VkPhysicalDeviceProperties for supported formats
-                if (result == VK_SUCCESS) {
+                if (result == KTX_SUCCESS) {
                     check(ktxTexture2_TranscodeBasis(
                         texture.get(), KTX_TTF_BC7_RGBA, 0
                     ));
@@ -967,6 +975,7 @@ namespace imv {
             .layout = pipeline_layout,
             .renderPass = r.render_pass.get(),
         };
+        // TODO: cache pipelines
         check(vkCreateGraphicsPipelines(
             r.device.get(), r.pipeline_cache.get(), 1, &create_info, nullptr,
             out_ptr(image.pipelines.back())

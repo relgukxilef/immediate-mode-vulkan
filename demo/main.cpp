@@ -1,4 +1,5 @@
-#include "glm/ext/matrix_transform.hpp"
+#include "main.h"
+
 #include <cassert>
 #include <memory>
 #include <vector>
@@ -218,13 +219,15 @@ struct car {
     }
 };
 
-int main() {
+task game_main() {
     unique_glfw glfw;
 
     int window_width = 1280, window_height = 720;
 
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    // API depends on platform but must be set after call to glfwInit.
+    glfwWindowHint(GLFW_CLIENT_API, glfw_api);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
     unique_window window{glfwCreateWindow(
         window_width, window_height, "Vulkan Experiments", nullptr, nullptr
     )};
@@ -308,6 +311,7 @@ int main() {
     float steering_limit = 1;
 
     while (!glfwWindowShouldClose(window.get())) {
+        co_await animation_frame(window.get());
         imv::wait_frame();
 
         input input;
@@ -467,6 +471,4 @@ int main() {
         
         glfwPollEvents();
     }
-
-    return 0;
 }
