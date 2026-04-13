@@ -32,7 +32,7 @@ namespace imv {
     }
 
     struct image {
-        vector<unique_pipeline> pipelines;
+        // vector<unique_pipeline> pipelines;
         vector<unique_sampler> samplers;
 
         // TODO: allocate uniform data from a shared buffer
@@ -80,6 +80,7 @@ namespace imv {
     struct shader_module_file {
         unique_shader_module shader_module;
         filesystem::file_time_type last_update;
+        unsigned shader_number;
     };
 
     struct pipeline {
@@ -132,6 +133,7 @@ namespace imv {
         unordered_map<
             string, shader_module_file, string_hash, equal_to<>
         > shader_cache;
+        unsigned next_shader_number = 0;
 
         unique_ktx_device ktx_device;
         
@@ -142,7 +144,7 @@ namespace imv {
         unordered_map<
             vector<uint64_t>,
             pipeline, vector_hash, equal_to<>
-        > pipeline_layouts;
+        > pipelines;
 
         unordered_map<
             vector<uint64_t>,
@@ -606,7 +608,7 @@ namespace imv {
         ));
 
         vkResetCommandBuffer(image.command_buffer, 0);
-        image.pipelines.clear();
+        //image.pipelines.clear();
         image.samplers.clear();
         image.images.clear();
         image.image_memories.clear();
@@ -655,9 +657,6 @@ namespace imv {
 
         VkDeviceSize uniform_size = 128;
 
-        VkDescriptorSetLayout descriptor_set_layout;
-        VkPipelineLayout pipeline_layout;
-        
         vector<VkDescriptorSetLayoutBinding> descriptor_set_layout_binding {
             {
                 .binding = 0,
@@ -677,41 +676,6 @@ namespace imv {
             });
         }
         
-        {
-            VkDescriptorSetLayoutCreateInfo descriptor_create_info = {
-                .sType = 
-                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                .bindingCount =
-                    uint32_t(descriptor_set_layout_binding.size()),
-                .pBindings = descriptor_set_layout_binding.data(),
-            };
-            VkPipelineLayoutCreateInfo pipeline_create_info = {
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                .setLayoutCount = 1,
-            };
-            vector<uint64_t> key;
-            visit(key, descriptor_create_info);
-            visit(key, pipeline_create_info);
-
-            auto insert = r.pipeline_layouts.insert({key, {}});
-            if (insert.second) {
-                check(vkCreateDescriptorSetLayout(
-                    r.device.get(), &descriptor_create_info, nullptr, 
-                    out_ptr(insert.first->second.descriptor_set_layout)
-                ));
-                descriptor_set_layout = 
-                    insert.first->second.descriptor_set_layout.get();
-                pipeline_create_info.pSetLayouts = &descriptor_set_layout;
-                check(vkCreatePipelineLayout(
-                    r.device.get(), &pipeline_create_info, nullptr, 
-                    out_ptr(insert.first->second.pipeline_layout)
-                ));
-            }
-            descriptor_set_layout = 
-                insert.first->second.descriptor_set_layout.get();
-            pipeline_layout = insert.first->second.pipeline_layout.get();
-        }
-
         if (!image.uniform_buffer) {
             VkBufferCreateInfo create_info {
                 .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -819,8 +783,8 @@ namespace imv {
             ));
         }
 
-        image.pipelines.push_back({});
-        
+        vector<uint64_t> pipeline_key;
+
         r.pipeline_shader_stages.resize(info.stages.size());
 
         for (auto i = 0u; i < info.stages.size(); i++) {
@@ -830,7 +794,6 @@ namespace imv {
             auto last_write = filesystem::last_write_time(fileNameView);
             auto entry = insert.first;
             if (insert.second || last_write > entry->second.last_update) {
-                entry->second.last_update = last_write;
                 auto code = read_file(fileName);
                 VkShaderModuleCreateInfo create_info = {
                     .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -843,7 +806,11 @@ namespace imv {
                     out_ptr(shader_module)
                 );
                 if (result == VK_SUCCESS) {
-                    entry->second.shader_module = std::move(shader_module);
+                    entry->second = {
+                        .shader_module = std::move(shader_module),
+                        .last_update = last_write,
+                        .shader_number = r.next_shader_number++,
+                    };
                 }
             }
             VkPipelineShaderStageCreateInfo create_info = 
@@ -854,6 +821,7 @@ namespace imv {
             if (create_info.pName == nullptr)
                 create_info.pName = "main";
             r.pipeline_shader_stages[i] = create_info;
+            pipeline_key.push_back(entry->second.shader_number);
         }
 
         if (!image.vertex_buffer) {
@@ -898,6 +866,19 @@ namespace imv {
             }
         }
 
+        VkDescriptorSetLayoutCreateInfo descriptor_create_info = {
+            .sType = 
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount =
+            uint32_t(descriptor_set_layout_binding.size()),
+            .pBindings = descriptor_set_layout_binding.data(),
+        };
+        VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1,
+            // .pSetLayouts is part of the cache
+        };
+
         VkPipelineVertexInputStateCreateInfo pipeline_vertex_input_state = {
             .sType = 
                 VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -911,11 +892,11 @@ namespace imv {
                 data(vertex_input_attribute_description),
         };
         VkPipelineInputAssemblyStateCreateInfo pipeline_input_assembly_state = {
-            .sType =
-                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-            .primitiveRestartEnable = VK_FALSE,
-        };
+                .sType =
+                    VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+                .primitiveRestartEnable = VK_FALSE,
+            };
         VkViewport viewport = {
             .x = 0.0f, .y = 0.0f,
             .width = float(view.extent.width), 
@@ -972,14 +953,39 @@ namespace imv {
             .pRasterizationState = &pipeline_rasterization_state,
             .pMultisampleState = &pipeline_multisample_state,
             .pColorBlendState = &pipeline_color_blend_state,
-            .layout = pipeline_layout,
+            // .layout is part of the cache
             .renderPass = r.render_pass.get(),
         };
-        // TODO: cache pipelines
-        check(vkCreateGraphicsPipelines(
-            r.device.get(), r.pipeline_cache.get(), 1, &create_info, nullptr,
-            out_ptr(image.pipelines.back())
-        ));
+
+        visit(pipeline_key, descriptor_create_info);
+        visit(pipeline_key, pipeline_layout_create_info);
+        visit(pipeline_key, create_info);
+
+        auto insert = r.pipelines.insert({pipeline_key, {}});
+        auto entry = insert.first;
+        if (insert.second) {
+            check(vkCreateDescriptorSetLayout(
+                r.device.get(), &descriptor_create_info, nullptr, 
+                out_ptr(entry->second.descriptor_set_layout)
+            ));
+            auto descriptor_set_layout = 
+                entry->second.descriptor_set_layout.get();
+            pipeline_layout_create_info.pSetLayouts = &descriptor_set_layout;
+            check(vkCreatePipelineLayout(
+                r.device.get(), &pipeline_layout_create_info, nullptr, 
+                out_ptr(entry->second.pipeline_layout)
+            ));
+            create_info.layout = entry->second.pipeline_layout.get();
+
+            check(vkCreateGraphicsPipelines(
+                r.device.get(), r.pipeline_cache.get(), 1, &create_info, nullptr,
+                out_ptr(entry->second.pipeline)
+            ));
+        }
+        
+        auto descriptor_set_layout = entry->second.descriptor_set_layout.get();
+        auto pipeline_layout = entry->second.pipeline_layout.get();
+        auto pipeline = entry->second.pipeline.get();
 
         {
             // TODO: may need a separate pool per pipeline layout
@@ -1067,16 +1073,16 @@ namespace imv {
         }
         vkUpdateDescriptorSets(
             r.device.get(), 
-            size(write_descriptor_set), data(write_descriptor_set), 0, nullptr
+            uint32_t(size(write_descriptor_set)), data(write_descriptor_set), 0, nullptr
         );
 
         vkCmdBindPipeline(
             image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            image.pipelines.back().get()
+            pipeline
         );
 
         vkCmdBindVertexBuffers(
-            image.command_buffer, 0, size(info.vertex_input_bindings), 
+            image.command_buffer, 0, uint32_t(size(info.vertex_input_bindings)),
             data(vertex_buffers), data(vertex_offsets)
         );
 
