@@ -334,7 +334,8 @@ task game_main() {
         if (glfwGetKey(window.get(), GLFW_KEY_LEFT))
             input.steering -= steering_limit;
 
-        while (last_update < glfwGetTime()) {
+        int update_limit = 10;
+        while (last_update < glfwGetTime() && update_limit-- > 0) {
             last_update += time_delta;
             car.update(input, track);
 
