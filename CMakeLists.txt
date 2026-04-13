@@ -60,7 +60,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     VulkanGL
     GIT_REPOSITORY https://github.com/relgukxilef/VulkanGL.git
-    GIT_TAG wip/no-submodules
+    GIT_TAG main
 )
 
 FetchContent_MakeAvailable(
