@@ -17,6 +17,6 @@ void main() {
     tile = abs(tile - 0.5) - 0.25;
     tile = clamp(tile / (fwidth(tile) + uniforms.velocity.xy / 20) * 2, -1, 1);
     float color = tile.x * tile.y;
-    color = 0.8 + 0.2 * color;
+    color = 0.9 + 0.1 * color;
     fragment_color = vec4(pow(color, (1 / 2.2)) * vertex_color.rgb, 1);
 }
