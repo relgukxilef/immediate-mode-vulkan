@@ -455,7 +455,9 @@ task game_main() {
         uniforms.matrix = scale(uniforms.matrix, {(float)height / width, 1, 1});
         uniforms.matrix = translate(uniforms.matrix, {0.9, 0.8, 0.0});
         uniforms.matrix = rotate(
-            uniforms.matrix, glm::exp(length(car.velocity * 0.015f)), {0, 0, 1}
+            uniforms.matrix,
+            pi<float>() * (0.25f + length(car.velocity) * 0.005f),
+            {0, 0, 1}
         );
         uniforms.matrix = scale(uniforms.matrix, {0.01, 0.1, 1});
         uniforms.matrix = translate(uniforms.matrix, {0.0, 1, 0.0});
