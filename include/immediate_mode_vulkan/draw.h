@@ -33,6 +33,9 @@ namespace imv {
 
     struct image_info {
         std::string_view file_name;
+        const void* buffer_source_pointer = nullptr;
+        size_t buffer_size = 0;
+        VkImageCreateInfo image_info;
         VkSamplerCreateInfo sampler_info;
     };
 

@@ -51,6 +51,7 @@ namespace imv {
         vector<shared_ptr<unique_device_memory>> image_memories;
         vector<shared_ptr<unique_image>> images;
         vector<shared_ptr<unique_image_view>> image_views;
+        vector<unique_allocation> image_allocations;
 
         vector<unique_descriptor_set> descriptor_sets;
         VkCommandBuffer command_buffer;
@@ -695,94 +696,6 @@ namespace imv {
             ));
         }
 
-        size_t first_image_view = image.image_views.size();
-
-        for (const auto& image_file : info.images) {
-            auto file_name = image_file.file_name;
-            auto insert = r.image_cache.emplace(file_name, imv::image_file{});
-            auto last_write = filesystem::last_write_time(file_name);
-            auto entry = insert.first;
-            if (insert.second || last_write > entry->second.last_update) {
-                entry->second.last_update = last_write;
-                
-                unique_ktx_texture2 texture;
-                unique_image vulkan_image;
-                unique_device_memory memory;
-                unique_image_view view;
-                
-                ktxVulkanTexture vulkan_texture;
-
-                auto result = ktxTexture2_CreateFromNamedFile(
-                    entry->first.c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, 
-                    out_ptr(texture)
-                );
-                // TODO: check VkPhysicalDeviceProperties for supported formats
-                if (result == KTX_SUCCESS) {
-                    check(ktxTexture2_TranscodeBasis(
-                        texture.get(), KTX_TTF_BC7_RGBA, 0
-                    ));
-                    check(ktxTexture2_VkUploadEx(
-                        texture.get(), r.ktx_device.get(), &vulkan_texture, 
-                        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT, 
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                    ));
-
-                    vulkan_image.reset(vulkan_texture.image);
-                    memory.reset(vulkan_texture.deviceMemory);
-
-                    VkImageViewCreateInfo create_info = {
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                        .image = vulkan_image.get(),
-                        .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                        .format = vulkan_texture.imageFormat,
-                        .subresourceRange = {
-                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                            .baseMipLevel = 0,
-                            .levelCount = 1,
-                            .baseArrayLayer = 0,
-                            .layerCount = 1,
-                        },
-                    };
-                    check(vkCreateImageView(
-                        r.device.get(), &create_info, nullptr, 
-                        out_ptr(view)
-                    ));
-                    
-                    entry->second.image = 
-                        make_shared<unique_image>(std::move(vulkan_image));
-                    entry->second.device_memory = 
-                        make_shared<unique_device_memory>(std::move(memory));
-                    entry->second.view = 
-                        make_shared<unique_image_view>(std::move(view));
-                }
-            }
-
-            image.images.push_back(entry->second.image);
-            image.image_memories.push_back(entry->second.device_memory);
-            image.image_views.push_back(entry->second.view);
-        }
-
-        image.samplers.push_back({});
-
-        {
-            VkSamplerCreateInfo create_info = {
-                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                .magFilter = VK_FILTER_LINEAR,
-                .minFilter = VK_FILTER_LINEAR,
-                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                .anisotropyEnable = VK_FALSE,
-                .minLod = 0.0,
-                .maxLod = VK_LOD_CLAMP_NONE,
-            };
-            check(vkCreateSampler(
-                r.device.get(), &create_info, nullptr, 
-                out_ptr(image.samplers.back())
-            ));
-        }
-
         vector<uint64_t> pipeline_key;
 
         r.pipeline_shader_stages.resize(info.stages.size());
@@ -1040,40 +953,181 @@ namespace imv {
                 .range = uniform_size,
             }
         };
-        vector<VkWriteDescriptorSet> write_descriptor_set = {
-            {
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = image.descriptor_sets.back().get(),
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = uint32_t(size(descriptor_buffer_info)),
-                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .pBufferInfo = descriptor_buffer_info,
-            },
-        };
+        vector<VkWriteDescriptorSet> write_descriptor_set;
+        write_descriptor_set.push_back({
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = image.descriptor_sets.back().get(),
+            .dstBinding = uint32_t(write_descriptor_set.size()),
+            .dstArrayElement = 0,
+            .descriptorCount = uint32_t(size(descriptor_buffer_info)),
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = descriptor_buffer_info,
+        });
+
+        size_t first_image_view = image.image_views.size();
+
+        image.samplers.push_back({});
+
         vector<VkDescriptorImageInfo> descriptor_image_info;
-        for (int i = 0; i < info.images.size(); i++) {
+
+        {
+            VkSamplerCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                .magFilter = VK_FILTER_LINEAR,
+                .minFilter = VK_FILTER_LINEAR,
+                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .anisotropyEnable = VK_FALSE,
+                .minLod = 0.0,
+                .maxLod = VK_LOD_CLAMP_NONE,
+            };
+            check(vkCreateSampler(
+                r.device.get(), &create_info, nullptr, 
+                out_ptr(image.samplers.back())
+            ));
+        }
+
+        for (const auto& image_file : info.images) {
+            if (!image_file.buffer_source_pointer)
+                continue;
+
+            // vma already caches allocations
+            VmaAllocationCreateInfo allocation_info = {
+                .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .usage = VMA_MEMORY_USAGE_AUTO,
+            };
+            VkImage texture_image;
+            unique_allocation allocation;
+            check(vmaCreateImage(
+                r.allocator.get(), &image_file.image_info, &allocation_info, 
+                &texture_image, out_ptr(allocation), nullptr
+            ));
+
+            check(vmaCopyMemoryToAllocation(
+                r.allocator.get(), image_file.buffer_source_pointer,
+                allocation.get(), 0, image_file.buffer_size
+            ));
+
+            VkImageViewCreateInfo view_info = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = texture_image,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D, // TODO: read from parameters
+                .format = image_file.image_info.format,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+            unique_image_view view;
+            check(vkCreateImageView(
+                r.device.get(), &view_info, nullptr, 
+                out_ptr(view)
+            ));
+            image.image_views.push_back(make_shared<unique_image_view>(std::move(view)));
+            image.image_allocations.push_back(std::move(allocation));
             descriptor_image_info.push_back({
                 .sampler = image.samplers.back().get(),
-                .imageView = image.image_views[first_image_view + i]->get(),
+                .imageView = image.image_views.back()->get(),
                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             });
         }
 
-        for (unsigned i = 0; i < info.images.size(); i++) {
+        for (const auto& image_file : info.images) {
+            auto file_name = image_file.file_name;
+            if (file_name.empty())
+                continue;
+            auto insert = r.image_cache.emplace(file_name, imv::image_file{});
+            auto last_write = filesystem::last_write_time(file_name);
+            auto entry = insert.first;
+            if (insert.second || last_write > entry->second.last_update) {
+                entry->second.last_update = last_write;
+                
+                unique_ktx_texture2 texture;
+                unique_image vulkan_image;
+                unique_device_memory memory;
+                unique_image_view view;
+                
+                ktxVulkanTexture vulkan_texture;
+
+                auto result = ktxTexture2_CreateFromNamedFile(
+                    entry->first.c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, 
+                    out_ptr(texture)
+                );
+                // TODO: check VkPhysicalDeviceProperties for supported formats
+                if (result == KTX_SUCCESS) {
+                    check(ktxTexture2_TranscodeBasis(
+                        texture.get(), KTX_TTF_BC7_RGBA, 0
+                    ));
+                    // TODO: maybe use VMA for the allocation
+                    check(ktxTexture2_VkUploadEx(
+                        texture.get(), r.ktx_device.get(), &vulkan_texture, 
+                        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT, 
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    ));
+
+                    // TODO: make the following code agnostic to whether the 
+                    // texture was read from a file or a buffer
+                    vulkan_image.reset(vulkan_texture.image);
+                    memory.reset(vulkan_texture.deviceMemory);
+
+                    VkImageViewCreateInfo create_info = {
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                        .image = vulkan_image.get(),
+                        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                        .format = vulkan_texture.imageFormat,
+                        .subresourceRange = {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                    };
+                    check(vkCreateImageView(
+                        r.device.get(), &create_info, nullptr, 
+                        out_ptr(view)
+                    ));
+                    
+                    entry->second.image = 
+                        make_shared<unique_image>(std::move(vulkan_image));
+                    entry->second.device_memory = 
+                        make_shared<unique_device_memory>(std::move(memory));
+                    entry->second.view = 
+                        make_shared<unique_image_view>(std::move(view));
+                }
+            }
+
+            image.images.push_back(entry->second.image);
+            image.image_memories.push_back(entry->second.device_memory);
+            image.image_views.push_back(entry->second.view);
+            descriptor_image_info.push_back({
+                .sampler = image.samplers.back().get(),
+                .imageView = image.image_views.back()->get(),
+                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            });
+        }
+
+        // write_descriptor_set holds pointers into descriptor_image_info
+        for (const auto& info : descriptor_image_info) {
             write_descriptor_set.push_back({
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .dstSet = image.descriptor_sets.back().get(),
-                .dstBinding = 1 + i,
+                .dstBinding = uint32_t(write_descriptor_set.size()),
                 .dstArrayElement = 0,
                 .descriptorCount = 1,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = &descriptor_image_info[i],
+                .pImageInfo = &info,
             });
         }
         vkUpdateDescriptorSets(
             r.device.get(), 
-            uint32_t(size(write_descriptor_set)), data(write_descriptor_set), 0, nullptr
+            uint32_t(size(write_descriptor_set)), data(write_descriptor_set), 0, 
+            nullptr
         );
 
         vkCmdBindPipeline(
