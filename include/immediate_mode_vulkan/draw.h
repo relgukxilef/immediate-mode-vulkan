@@ -48,6 +48,7 @@ namespace imv {
         const void* uniform_source_pointer;
         VkDeviceSize uniform_source_size;
         uint32_t vertex_count = 0;
+        VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     };
 
     bool draw(const draw_info&);

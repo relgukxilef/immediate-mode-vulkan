@@ -1,11 +1,10 @@
-#include <cstdint>
 #include <immediate_mode_vulkan/draw.h>
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
 #include <immediate_mode_vulkan/resources/ktx_resources.h>
 #include "serialize.h"
-#include "vulkan/vulkan_core.h"
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 #include <unordered_map>
@@ -807,7 +806,7 @@ namespace imv {
         VkPipelineInputAssemblyStateCreateInfo pipeline_input_assembly_state = {
                 .sType =
                     VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-                .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+                .topology = info.topology,
                 .primitiveRestartEnable = VK_FALSE,
             };
         VkViewport viewport = {
