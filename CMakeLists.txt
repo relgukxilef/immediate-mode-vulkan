@@ -63,8 +63,14 @@ FetchContent_Declare(
     GIT_TAG main
 )
 
+FetchContent_Declare(
+    freetype
+    GIT_REPOSITORY https://github.com/freetype/freetype.git
+    GIT_TAG VER-2-14-3
+)
+
 FetchContent_MakeAvailable(
-    glm VulkanHeaders VulkanMemoryAllocator emsdk VulkanGL
+    glm VulkanHeaders VulkanMemoryAllocator emsdk VulkanGL freetype
 )
 
 set(KTX_FEATURE_TESTS OFF)
@@ -119,7 +125,9 @@ add_executable(
 target_compile_features(demo PRIVATE cxx_std_23)
 
 target_link_libraries(
-    demo PRIVATE ImmediateModeVulkan
+    demo PRIVATE 
+    ImmediateModeVulkan
+    freetype
 )
 
 target_include_directories(
@@ -163,6 +171,7 @@ endfunction(add_shader)
 add_shader(demo demo/vertex.glsl)
 add_shader(demo demo/fragment.glsl)
 add_shader(demo demo/flat_fragment.glsl)
+add_shader(demo demo/text_fragment.glsl)
 
 function(add_texture TARGET TEXTURE)
     add_custom_command(
@@ -185,3 +194,10 @@ endfunction()
 
 add_texture(demo demo/1.png)
 add_texture(demo demo/2.png)
+
+add_custom_command(
+    TARGET demo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/demo/daggersquare.regular.otf
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/daggersquare.regular.otf
+)

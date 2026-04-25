@@ -1,8 +1,12 @@
 #include "main.h"
+#include "glm/ext/matrix_clip_space.hpp"
+#include "vulkan/vulkan_core.h"
 
 #include <cassert>
 #include <memory>
+#include <unordered_map>
 #include <vector>
+#include <string_view>
 
 #define GLFW_INCLUDE_VULKAN
 #define GLFW_VULKAN_STATIC
@@ -15,6 +19,8 @@
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/draw.h>
 
+#include <freetype/freetype.h>
+#include <freetype/ftmodapi.h>
 
 using std::unique_ptr;
 using std::out_ptr;
@@ -121,7 +127,8 @@ struct track {
             {0, 0, 1}
         );
         vec2 normal = {forward.y, -forward.x};
-        vec2 left = (radius + width) * normal, right = (radius - width) * normal;
+        vec2 left = 
+            (radius + width) * normal, right = (radius - width) * normal;
         vec2 center = end - normal * radius;
         for (auto i = 0u; i < resolution; i++) {
             strip.push_back(center + left);
@@ -219,6 +226,33 @@ struct car {
     }
 };
 
+struct glyph {
+    float advance;
+    vec2 size, source_offset, destination_offset;
+};
+
+void write(
+    const std::unordered_map<char, glyph>& glyphs, 
+    std::vector<vec2> &buffer,
+    std::string_view text
+) {
+    vec2 position = {};
+    for (char c : text) {
+        auto glyph = glyphs.at(c);
+        vec2 source = glyph.source_offset;
+        vec2 destination = position - glyph.destination_offset;
+        vec2 size = glyph.size;
+        for (
+            vec2 vertex : {vec2(0, 0), {1, 0}, {0, 1}, {1, 0}, {0, 1}, {1, 1},}
+        ) {
+            buffer.insert(buffer.end(), {
+                destination + vertex * size, source + vertex * size,
+            });
+        }
+        position.x += glyph.advance;
+    }
+}
+
 task game_main() {
     unique_glfw glfw;
 
@@ -309,6 +343,60 @@ task game_main() {
     vec2 camera_position = {}, camera_velocity = {};
     float last_update = float(glfwGetTime());
     float steering_limit = 1;
+    
+    unsigned char font_map[256 * 256] = {};
+    FT_Library library;
+    FT_Init_FreeType(&library);
+    FT_Int spread = 2;
+    FT_Property_Set(library, "sdf", "spread", &spread);
+
+    FT_Face face;
+    assert(FT_New_Face(
+        library, "demo/daggersquare.regular.otf", 0, &face
+    ) == 0);
+    std::unordered_map<char, glyph> glyphs;
+    FT_Set_Pixel_Sizes(face, 16, 16);
+    {
+        int height = 0, x = 0, y = 0;
+        for (char c : {
+            '+', '-', '.', '/',
+            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':',
+        }) {
+            FT_UInt glyph_index = FT_Get_Char_Index(face, c);
+            FT_Load_Glyph(
+                face, glyph_index, FT_LOAD_NO_BITMAP | FT_LOAD_NO_HINTING
+            );
+            FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF);
+
+            auto& bitmap = face->glyph->bitmap;
+            if (x + bitmap.width >= 256) {
+                x = 0;
+                y = height;
+            }
+            height = max<int>(height, y + bitmap.rows);
+            for (unsigned row = 0; row < bitmap.rows; row++) {
+                std::copy(
+                    bitmap.buffer + row * abs(bitmap.pitch), 
+                    bitmap.buffer + row * abs(bitmap.pitch) + bitmap.width, 
+                    font_map + (row + y) * 256 + x
+                );
+            }
+            glyphs[c] = {
+                .advance = 
+                    face->glyph->linearHoriAdvance / float(1 << 16) / 256.f,
+                .size = vec2{bitmap.width, bitmap.rows} / 256.f,
+                .source_offset = vec2{x, y,} / 256.f,
+                .destination_offset = 
+                    vec2{face->glyph->bitmap_left, face->glyph->bitmap_top,} / 
+                    256.f,
+            };
+            x += bitmap.width;
+        }
+    }
+
+    std::vector<vec2> text;
+
+    FT_Done_FreeType(library);
 
     while (!glfwWindowShouldClose(window.get())) {
         co_await animation_frame(window.get());
@@ -342,9 +430,8 @@ task game_main() {
             vec2 forward = { sin(car.heading), cos(car.heading) };
 
             camera_position += camera_velocity * time_delta;
-            camera_position += (
-                car.position - forward * 10.f - camera_position
-            ) * time_delta * camera_speed;
+            auto motion = car.position - forward * 10.f - camera_position;
+            camera_position += time_delta * camera_speed * motion;
             camera_velocity += 
                 time_delta * camera_acceleration * 
                 (car.velocity - camera_velocity);
@@ -469,7 +556,71 @@ task game_main() {
             .uniform_source_size = sizeof(uniforms),
             .vertex_count = 4,
         });
-        
+
+        uniforms.matrix = mat4{1};
+        text.clear();
+        write(glyphs, text, "01:23.45");
+
+        imv::draw({
+            .stages = {
+                imv::stage_info{ 
+                    .code_file_name = "demo/vertex.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
+                }, { 
+                    .code_file_name = "demo/text_fragment.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
+                }, 
+            },
+            .vertex_input_bindings = {
+                {
+                    .buffer_source_pointer = text.data(),
+                    .buffer_source_size = text.size() * sizeof(vec2),
+                    .description = {
+                        .stride = 2 * sizeof(vec2),
+                        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+                    }, 
+                    .attributes = {
+                        { 0, 0, VK_FORMAT_R32G32_SFLOAT, },
+                        { 1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(vec2) },
+                    },
+                },
+            },
+            .images = imv::image_info{
+                .buffer_source_pointer = font_map,
+                .buffer_size = std::size(font_map),
+                .image_info = {
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                    .imageType = VK_IMAGE_TYPE_2D,
+                    .format = VK_FORMAT_R8_UNORM,
+                    .extent = { 256, 256, 1, },
+                    .mipLevels = 1,
+                    .arrayLayers = 1,
+                    .samples = VK_SAMPLE_COUNT_1_BIT,
+                    .tiling = VK_IMAGE_TILING_LINEAR,
+                    .usage = 
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | 
+                        VK_IMAGE_USAGE_SAMPLED_BIT,
+                    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                },
+                .sampler_info = {
+                    .magFilter = VK_FILTER_LINEAR,
+                    .minFilter = VK_FILTER_LINEAR,
+                    .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                    .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    .anisotropyEnable = VK_FALSE,
+                    .minLod = 0.0,
+                    .maxLod = VK_LOD_CLAMP_NONE,
+                },
+            },
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = uint32_t(text.size() / 2),
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        });
+
         imv::submit();
         
         glfwPollEvents();
