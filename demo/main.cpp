@@ -240,7 +240,7 @@ void write(
     for (char c : text) {
         auto glyph = glyphs.at(c);
         vec2 source = glyph.source_offset;
-        vec2 destination = position - glyph.destination_offset;
+        vec2 destination = position + glyph.destination_offset;
         vec2 size = glyph.size;
         for (
             vec2 vertex : {vec2(0, 0), {1, 0}, {0, 1}, {1, 0}, {0, 1}, {1, 1},}
@@ -387,7 +387,7 @@ task game_main() {
                 .size = vec2{bitmap.width, bitmap.rows} / 256.f,
                 .source_offset = vec2{x, y,} / 256.f,
                 .destination_offset = 
-                    vec2{face->glyph->bitmap_left, face->glyph->bitmap_top,} / 
+                    vec2{face->glyph->bitmap_left, -face->glyph->bitmap_top,} / 
                     256.f,
             };
             x += bitmap.width;
@@ -585,7 +585,7 @@ task game_main() {
                     },
                 },
             },
-            .images = imv::image_info{
+            .images = {{
                 .buffer_source_pointer = font_map,
                 .buffer_size = std::size(font_map),
                 .image_info = {
@@ -614,7 +614,7 @@ task game_main() {
                     .minLod = 0.0,
                     .maxLod = VK_LOD_CLAMP_NONE,
                 },
-            },
+            },},
             .uniform_source_pointer = &uniforms,
             .uniform_source_size = sizeof(uniforms),
             .vertex_count = uint32_t(text.size() / 2),

@@ -16,6 +16,8 @@ layout(location = 0) out vec4 fragment_color;
 
 void main() {
     float distance = texture(font, vertex_source).r;
+    if (distance < 0.25)
+        discard;
     distance = distance - 0.5;
     vec2 derivative = vec2(dFdx(distance), dFdy(distance));
     vec3 distance2 = vec3(distance - derivative.x / 3, distance, distance + derivative.x / 3);

@@ -31,7 +31,6 @@ namespace imv {
     }
 
     struct image {
-        // vector<unique_pipeline> pipelines;
         vector<unique_sampler> samplers;
 
         // TODO: allocate uniform data from a shared buffer
@@ -608,11 +607,12 @@ namespace imv {
         ));
 
         vkResetCommandBuffer(image.command_buffer, 0);
-        //image.pipelines.clear();
+        // can't just assign, because of command_buffer
         image.samplers.clear();
         image.images.clear();
         image.image_memories.clear();
         image.image_views.clear();
+        image.image_allocations.clear();
         image.descriptor_sets.clear();
         image.uniform_buffer_size = 0;
         image.vertex_buffer_size = 0;
@@ -1027,7 +1027,9 @@ namespace imv {
                 r.device.get(), &view_info, nullptr, 
                 out_ptr(view)
             ));
-            image.image_views.push_back(make_shared<unique_image_view>(std::move(view)));
+            image.image_views.push_back(
+                make_shared<unique_image_view>(std::move(view))
+            );
             image.image_allocations.push_back(std::move(allocation));
             descriptor_image_info.push_back({
                 .sampler = image.samplers.back().get(),
