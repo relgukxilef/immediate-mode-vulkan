@@ -74,7 +74,7 @@ vec2 smooth_normalize(vec2 x) {
 }
 
 float steering_speed = 0.5f;
-float turning_speed = 0.04f;
+float turning_speed = 1.f / 40; // 40 meter turn radius
 float acceleration = 400.0f;
 float break_strength = 1.5f;
 float camera_speed = 10;
