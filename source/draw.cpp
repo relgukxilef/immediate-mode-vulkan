@@ -993,8 +993,28 @@ namespace imv {
                 continue;
 
             // vma already caches allocations
+            VkBufferCreateInfo buffer_info = {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .size = image_file.buffer_size,
+                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            };
             VmaAllocationCreateInfo allocation_info = {
                 .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .usage = VMA_MEMORY_USAGE_AUTO,
+            };
+            VkBuffer texture_buffer;
+            unique_allocation buffer_allocation;
+            check(vmaCreateBuffer(
+                r.allocator.get(), &buffer_info, &allocation_info, 
+                &texture_buffer, out_ptr(buffer_allocation), nullptr
+            ));
+
+            check(vmaCopyMemoryToAllocation(
+                r.allocator.get(), image_file.buffer_source_pointer,
+                buffer_allocation.get(), 0, image_file.buffer_size
+            ));
+
+            allocation_info = {
                 .usage = VMA_MEMORY_USAGE_AUTO,
             };
             VkImage texture_image;
@@ -1004,10 +1024,112 @@ namespace imv {
                 &texture_image, out_ptr(allocation), nullptr
             ));
 
-            check(vmaCopyMemoryToAllocation(
-                r.allocator.get(), image_file.buffer_source_pointer,
-                allocation.get(), 0, image_file.buffer_size
+            // TODO: have a cached, shared command buffer for transfers
+            VkCommandBufferAllocateInfo command_info = {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool = r.command_pool.get(),
+                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                .commandBufferCount = 1,
+            };
+            VkCommandBuffer copy_command_buffer;
+            check(vkAllocateCommandBuffers(
+                r.device.get(), &command_info, &copy_command_buffer
             ));
+            VkCommandBufferBeginInfo begin_info = {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            };
+            check(vkBeginCommandBuffer(copy_command_buffer, &begin_info));
+
+            VkImageMemoryBarrier barrier = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = texture_image,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+            vkCmdPipelineBarrier(
+                copy_command_buffer,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+
+            VkBufferImageCopy buffer_image_copy = {
+                .bufferOffset = 0,
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+                .imageOffset = {0, 0, 0},
+                .imageExtent = image_file.image_info.extent,
+            };
+            vkCmdCopyBufferToImage(
+                copy_command_buffer, texture_buffer,
+                texture_image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &buffer_image_copy
+            );
+
+            barrier = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = texture_image,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+            vkCmdPipelineBarrier(
+                copy_command_buffer,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+
+            check(vkEndCommandBuffer(copy_command_buffer));
+
+            VkSubmitInfo submit_info = {
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &copy_command_buffer,
+            };
+            check(vkQueueSubmit(
+                r.graphics_queue, 1, &submit_info, VK_NULL_HANDLE
+            ));
+            check(vkQueueWaitIdle(r.graphics_queue));
+            
+            vkFreeCommandBuffers(
+                r.device.get(), r.command_pool.get(), 1, &copy_command_buffer
+            );
 
             VkImageViewCreateInfo view_info = {
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
