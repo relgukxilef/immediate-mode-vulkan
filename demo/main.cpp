@@ -6,6 +6,7 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include <string>
 #include <string_view>
 
 #define GLFW_INCLUDE_VULKAN
@@ -329,9 +330,9 @@ task game_main() {
     track.append_straight(40, 20);
     track.append_turn(-40, 20);
     track.append_straight(40, 20);
-    track.append_straight(10, 10);
-    track.append_turn(-40, 10);
-    track.append_straight(10, 10);
+    track.append_straight(10, 20);
+    track.append_turn(-40, 20);
+    track.append_straight(10, 20);
     track.append_straight(150, 20);
     track.append_turn(-80, 20);
     track.append_straight(170, 20);
@@ -397,6 +398,9 @@ task game_main() {
     std::vector<vec2> text;
 
     FT_Done_FreeType(library);
+    std::string time_text;
+    float race_time = 0;
+    int laps = 0;
 
     while (!glfwWindowShouldClose(window.get())) {
         co_await animation_frame(window.get());
@@ -425,7 +429,22 @@ task game_main() {
         int update_limit = 10;
         while (last_update < glfwGetTime() && update_limit-- > 0) {
             last_update += time_delta;
+            race_time += time_delta;
+            vec2 old_position = car.position;
             car.update(input, track);
+
+            bool side = line_side({-20, 1}, {20, 1}, old_position) < 0;
+            if (!side && line_side({-20, 1}, {20, 1}, car.position) < 0) {
+                if (side)
+                    laps--;
+                else
+                    laps++;
+            }
+            if (laps == 4) {
+                race_time = 0;
+                laps = 0;
+                car = {};
+            }
 
             vec2 forward = { sin(car.heading), cos(car.heading) };
 
@@ -558,8 +577,21 @@ task game_main() {
         });
 
         uniforms.matrix = mat4{1};
+        int integer_time = race_time * 100;
         text.clear();
-        write(glyphs, text, "01:23.45");
+        time_text.clear();
+        time_text += std::to_string(integer_time / 100 / 60);
+        time_text += ':';
+        int seconds = integer_time / 100 % 60;
+        if (seconds < 10)
+            time_text += '0';
+        time_text += std::to_string(seconds);
+        time_text += '.';
+        int hundredths = integer_time % 100;
+        if (hundredths < 10)
+            time_text += '0';
+        time_text += std::to_string(hundredths);
+        write(glyphs, text, time_text);
 
         imv::draw({
             .stages = {
