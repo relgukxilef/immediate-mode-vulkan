@@ -1,6 +1,4 @@
 #include "main.h"
-#include "glm/ext/matrix_clip_space.hpp"
-#include "vulkan/vulkan_core.h"
 
 #include <cassert>
 #include <memory>
@@ -19,6 +17,7 @@
 
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/draw.h>
+#include <immediate_mode_vulkan/edit.h>
 
 #include <freetype/freetype.h>
 #include <freetype/ftmodapi.h>
@@ -320,8 +319,10 @@ task game_main() {
         instance.get(), window.get(), nullptr, out_ptr(surface)
     ));
 
-    imv::renderer r(instance.get(), surface.get());
-    imv::global_renderer = &r;
+    imv::renderer renderer(instance.get(), surface.get());
+    imv::global_renderer = &renderer;
+    imv::editor editor;
+    imv::global_editor = &editor;
 
     track track;
 
@@ -405,6 +406,17 @@ task game_main() {
     while (!glfwWindowShouldClose(window.get())) {
         co_await animation_frame(window.get());
         imv::wait_frame();
+        double x, y;
+        glfwGetCursorPos(window.get(), &x, &y);
+        imv::set_inputs({
+            .mouse = {
+                .x = float(x),
+                .y = float(y),
+                .primary = 
+                    glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) == 
+                    GLFW_PRESS,
+            }
+        });
 
         input input;
         

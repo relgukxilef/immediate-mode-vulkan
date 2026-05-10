@@ -69,10 +69,6 @@ FetchContent_Declare(
     GIT_TAG VER-2-14-3
 )
 
-FetchContent_MakeAvailable(
-    glm VulkanHeaders VulkanMemoryAllocator emsdk VulkanGL freetype
-)
-
 set(KTX_FEATURE_TESTS OFF)
 set(KTX_FEATURE_TOOLS ON)
 set(KTX_FEATURE_VK_UPLOAD ON)
@@ -83,7 +79,15 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
     GIT_TAG v4.4.2
 )
-FetchContent_MakeAvailable(KTX)
+
+FetchContent_Declare(json
+    GIT_REPOSITORY https://github.com/nlohmann/json
+    GIT_TAG v3.12.0
+)
+
+FetchContent_MakeAvailable(
+    glm VulkanHeaders VulkanMemoryAllocator KTX json emsdk VulkanGL freetype
+)
 
 if (DESKTOP)
     FetchContent_MakeAvailable(glfw)
@@ -100,13 +104,17 @@ add_library(
     source/resources/vulkan_memory_allocator_resource.cpp
     include/immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h
     include/immediate_mode_vulkan/resources/ktx_resources.h
+    include/immediate_mode_vulkan/edit.h
+    source/edit.cpp
+    include/immediate_mode_vulkan/globals.h
+    source/globals.cpp
 )
 
 target_link_libraries(
     ImmediateModeVulkan
     $<${DESKTOP}:gdi32 user32 kernel32 Vulkan::Vulkan glfw>
     Vulkan::Headers glm
-    VulkanMemoryAllocator ktx_read
+    VulkanMemoryAllocator ktx_read nlohmann_json::nlohmann_json
 )
 
 target_include_directories(
@@ -167,6 +175,20 @@ function(add_shader TARGET SHADER)
     )
     target_sources(${TARGET} PRIVATE ${output_path}.spv ${input_path})
 endfunction(add_shader)
+
+add_shader(ImmediateModeVulkan source/flat_vertex.glsl)
+add_shader(ImmediateModeVulkan source/flat_fragment.glsl)
+
+target_compile_features(demo PRIVATE cxx_std_23)
+
+target_link_libraries(
+    demo PRIVATE ImmediateModeVulkan
+)
+
+target_include_directories(
+    demo PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 add_shader(demo demo/vertex.glsl)
 add_shader(demo demo/fragment.glsl)

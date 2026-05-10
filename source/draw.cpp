@@ -3,6 +3,7 @@
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
 #include <immediate_mode_vulkan/resources/ktx_resources.h>
 #include "serialize.h"
+#include <vulkan/vulkan_core.h>
 
 #include <cstdint>
 #include <memory>
@@ -435,6 +436,11 @@ namespace imv {
         if (!renderer)
             renderer = global_renderer;
         return *renderer;
+    }
+
+    VkExtent2D get_surface_size(renderer* renderer) {
+        renderer_data& r = *get(renderer).d;
+        return r.view.extent;
     }
 
     void wait_frame(renderer* renderer) {
@@ -1258,10 +1264,11 @@ namespace imv {
             pipeline
         );
 
-        vkCmdBindVertexBuffers(
-            image.command_buffer, 0, uint32_t(size(info.vertex_input_bindings)),
-            data(vertex_buffers), data(vertex_offsets)
-        );
+        if (!vertex_buffers.empty())
+            vkCmdBindVertexBuffers(
+                image.command_buffer, 0, uint32_t(size(vertex_buffers)),
+                data(vertex_buffers), data(vertex_offsets)
+            );
 
         auto descriptor_set = image.descriptor_sets.back().get();
         vkCmdBindDescriptorSets(
@@ -1273,14 +1280,19 @@ namespace imv {
         vkCmdDraw(image.command_buffer, info.vertex_count, 1, 0, 0);
 
         // TODO: store offset in uniform_buffer?
+        const void* pointer = info.uniform_source_pointer;
+        size_t size = info.uniform_source_size;
+        if (!pointer) {
+            pointer = info.uniform_source.pointer;
+            size = info.uniform_source.size;
+        }
         check(vmaCopyMemoryToAllocation(
-            r.allocator.get(), info.uniform_source_pointer, 
+            r.allocator.get(), pointer, 
             image.uniform_allocation.get(), 
-            image.uniform_buffer_size, info.uniform_source_size
+            image.uniform_buffer_size, size
         ));
 
-        image.uniform_buffer_size += 
-            aligned(info.uniform_source_size, r.offset_alignment);
+        image.uniform_buffer_size += aligned(size, r.offset_alignment);
 
         return true;
     }

@@ -1,3 +1,4 @@
+#include "vulkan/vulkan_core.h"
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <initializer_list>
@@ -16,12 +17,25 @@ namespace imv {
 
     extern struct renderer* global_renderer;
 
+    VkExtent2D get_surface_size(renderer* renderer = nullptr);
+
     void wait_frame(renderer* renderer = nullptr);
 
     struct stage_info {
         // TODO: replace with string_view
         const char* code_file_name;
         VkPipelineShaderStageCreateInfo info;
+    };
+
+    struct buffer_data {
+        buffer_data() = default;
+        buffer_data(const void* pointer, size_t size) : 
+            pointer(pointer), size(size) {}
+        template<class T>
+        buffer_data(const T& t) : buffer_data(&t, sizeof(t)) {}
+
+        const void* pointer;
+        size_t size;
     };
 
     struct vertex_binding_info {
@@ -47,6 +61,7 @@ namespace imv {
         std::initializer_list<image_info> images;
         const void* uniform_source_pointer;
         VkDeviceSize uniform_source_size;
+        buffer_data uniform_source;
         uint32_t vertex_count = 0;
         VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     };
