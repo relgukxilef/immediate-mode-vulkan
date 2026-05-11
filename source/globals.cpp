@@ -37,11 +37,13 @@ namespace imv {
 
     map map::operator[](const std::string_view& key) {
         auto& map = entry->value;
-        if (create_missing && !map.contains(key)) {
-            map[key];
+        // for reasons unknown to me, contains doesn't accept string_view in em
+        std::string key_string(key);
+        if (create_missing && !map.contains(key_string)) {
+            map[key_string];
             dirty = true;
         }
-        return { make_unique<configuration_entry>(map.at(key)) };
+        return { make_unique<configuration_entry>(map.at(key_string)) };
     }
 
     map map::operator[](std::size_t index) {
@@ -62,6 +64,6 @@ namespace imv {
     }
 
     string_view deserialize<string_view>::operator()(map& value) {
-        return value.entry->value;
+        return (string&)value.entry->value;
     }
 }
