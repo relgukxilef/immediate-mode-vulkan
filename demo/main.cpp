@@ -79,6 +79,7 @@ float acceleration = 400.0f;
 float break_strength = 1.5f;
 float camera_speed = 10;
 float camera_acceleration = 0;
+int lap_count = 4;
 
 float line_side(vec2 a, vec2 b, vec2 point) {
     b -= a;
@@ -90,6 +91,22 @@ float line_distance(vec2 a, vec2 b, vec2 point) {
     b -= a;
     point -= a;
     return line_side({}, normalize(b), point);
+}
+
+int edge_crossing(vec2 a, vec2 b, vec2 s, vec2 e) {
+    b -= a;
+    s -= a;
+    e -= a;
+    if (dot(b, s) < 0)
+        return 0;
+    if (dot(b, e) < 0)
+        return 0;
+    if (dot(b, b - s) < 0)
+        return 0;
+    if (dot(b, b - e) < 0)
+        return 0;
+    vec2 normal = {b.y, -b.x};
+    return int(dot(normal, e) < 0) - int(dot(normal, s) < 0);
 }
 
 vec2 line_collide(vec2 a, vec2 b, vec2 point, float depth) {
@@ -401,7 +418,7 @@ task game_main() {
     FT_Done_FreeType(library);
     std::string time_text;
     float race_time = 0;
-    int laps = 0;
+    int laps = -1;
 
     while (!glfwWindowShouldClose(window.get())) {
         co_await animation_frame(window.get());
@@ -445,16 +462,14 @@ task game_main() {
             vec2 old_position = car.position;
             car.update(input, track);
 
-            bool side = line_side({-20, 1}, {20, 1}, old_position) < 0;
-            if (!side && line_side({-20, 1}, {20, 1}, car.position) < 0) {
-                if (side)
-                    laps--;
-                else
-                    laps++;
-            }
-            if (laps == 4) {
+            int crossing = 
+                edge_crossing({-20, 1}, {20, 1}, old_position, car.position);
+            laps += crossing;
+            if (crossing != 0)
+                printf("%i\n", laps);
+            if (laps == lap_count) {
                 race_time = 0;
-                laps = 0;
+                laps = -1;
                 car = {};
             }
 
