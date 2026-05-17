@@ -75,7 +75,10 @@ vec2 smooth_normalize(vec2 x) {
 
 float steering_speed = 0.5f;
 float turning_speed = 1.f / 40; // 40 meter turn radius
-float acceleration = 400.0f;
+float acceleration = 800.f;
+float starting_acceleration = 100.f;
+float starting_speed = 30.f;
+float break_speed = 30.f;
 float break_strength = 1.5f;
 float camera_speed = 10;
 float camera_acceleration = 0;
@@ -109,7 +112,7 @@ int edge_crossing(vec2 a, vec2 b, vec2 s, vec2 e) {
     return int(dot(normal, e) < 0) - int(dot(normal, s) < 0);
 }
 
-vec2 line_collide(vec2 a, vec2 b, vec2 point, float depth) {
+vec2 edge_collide(vec2 a, vec2 b, vec2 point, float depth) {
     b -= a;
     vec2 local = point - a;
     vec2 tangent = normalize(b);
@@ -161,8 +164,8 @@ struct track {
         for (int i = 2; i < strip.size(); i+=2) {
             vec2 c = strip[i], d = strip[i + 1];
 
-            point = line_collide(a, c, point, 4);
-            point = line_collide(d, b, point, 4);
+            point = edge_collide(a, c, point, 4);
+            point = edge_collide(d, b, point, 4);
 
             a = c;
             b = d;
@@ -200,8 +203,12 @@ struct car {
         velocity = 
             mat2(rotate(mat4(1.0), heading_change, {0, 0, 1})) * velocity;
         
-        if (sign(input.acceleration) * forward_speed < -2)
+        if (sign(input.acceleration) * -forward_speed > break_speed)
             velocity -= forward_speed * break_strength * time_delta * forward;
+        else if (abs(forward_speed) < starting_speed)
+            velocity += 
+                starting_acceleration * time_delta * 
+                input.acceleration * forward;
         else
             velocity += 
                 acceleration * (1 - 0.5f * abs(steering)) * time_delta / 
@@ -603,8 +610,9 @@ task game_main() {
             .vertex_count = 4,
         });
 
-        uniforms.matrix = mat4{1};
-        int integer_time = race_time * 100;
+        uniforms.matrix = 
+            glm::scale(mat4{1}, vec3{1, (float)width / height, 1});
+        int integer_time = int(race_time * 100);
         text.clear();
         time_text.clear();
         time_text += std::to_string(integer_time / 100 / 60);
