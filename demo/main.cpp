@@ -462,6 +462,13 @@ task game_main() {
         if (glfwGetKey(window.get(), GLFW_KEY_LEFT))
             input.steering -= steering_limit;
 
+        int count;
+        const float* axes = glfwGetJoystickAxes(GLFW_JOYSTICK_1, &count);
+        if (count >= 6) {
+            input.steering += axes[0];
+            input.acceleration += axes[5] - axes[4];
+        }
+
         int update_limit = 10;
         while (last_update < glfwGetTime() && update_limit-- > 0) {
             last_update += time_delta;
