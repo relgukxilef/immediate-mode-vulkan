@@ -123,6 +123,8 @@ target_include_directories(
 
 target_compile_features(ImmediateModeVulkan PRIVATE cxx_std_23)
 
+target_compile_definitions(ImmediateModeVulkan PRIVATE JSON_HAS_CPP_17)
+
 # TODO: Move demo to separate CMakeLists.txt
 add_executable(
     demo
@@ -218,8 +220,8 @@ add_texture(demo demo/1.png)
 add_texture(demo demo/2.png)
 
 add_custom_command(
-    TARGET demo POST_BUILD
+    TARGET demo PRE_LINK
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/demo/daggersquare.regular.otf
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/daggersquare.regular.otf
+        ${CMAKE_CURRENT_SOURCE_DIR}/demo/Kwajong-4nL2W.ttf
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/Kwajong-4nL2W.ttf
 )

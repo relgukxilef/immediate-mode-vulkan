@@ -1,45 +1,57 @@
+#pragma once
+
 #include <string_view>
-#include <unordered_map>
 #include <string>
 #include <memory>
 
 namespace imv {
-    void load_globals(std::string_view file_name);
+    struct property_value;
+    struct scene_data;
 
-    void synchronize_globals();
+    struct property {
+        ~property();
 
-    template<class T> struct deserialize;
-
-    struct configuration_entry;
-
-    struct map {
-        map operator[](const std::string_view& key);
-        // string_view look-up is only supported with C++26
-        map operator[](std::size_t index);
+        property operator[](std::string_view key);
+        property operator[](std::size_t index);
 
         template<class T> operator T();
 
-        std::unique_ptr<configuration_entry> entry;
-    } extern globals;
+        std::shared_ptr<property_value> value;
+    };
 
-    template<class T> map::operator T() {
+    struct scene : property {
+        scene();
+        scene(std::string filename, bool create_missing = true);
+        
+        ~scene();
+
+        void synchronize();
+
+        std::shared_ptr<scene_data> data;
+        std::string filename;
+        bool create_missing = true, dirty = false;
+    };
+
+    template<class T> struct deserialize;
+
+    template<class T> property::operator T() {
         return deserialize<T>()(*this);
     }
 
     template<> struct deserialize<int> {
-        int operator()(map& value);
+        int operator()(property& value);
     };
 
     template<> struct deserialize<float> {
-        float operator()(map& value);
+        float operator()(property& value);
     };
 
     template<> struct deserialize<std::string_view> {
-        std::string_view operator()(map& value);
+        std::string_view operator()(property& value);
     };
 
     template<> struct deserialize<std::string> {
-        std::string operator()(map& value) {
+        std::string operator()(property& value) {
             return std::string(deserialize<std::string_view>()(value));
         }
     };

@@ -1,69 +1,85 @@
+#include "nlohmann/detail/json_pointer.hpp"
 #include <immediate_mode_vulkan/globals.h>
 
-#include <algorithm>
 #include <fstream>
 
-#include <memory>
 #include <nlohmann/json.hpp>
+
+#include <memory>
 #include <string_view>
+#include <vector>
+#include <unordered_map>
 
 using namespace std;
 using namespace nlohmann;
 
 namespace imv {
-    struct configuration_entry {
-        json value;
+
+    struct scene_data {
+        json file;
     };
-    bool create_missing = true, dirty = false;
-    string file_name;
-    map globals { make_unique<configuration_entry>() };
 
-    void load_globals(std::string_view file_name) {
-        imv::file_name = file_name;
-        auto c = json::parse(ifstream(imv::file_name));
-        auto v = c["test"];
-        dirty = false;
-    }
+    struct property_value {
+        weak_ptr<property_value> parent;
+        weak_ptr<scene_data> root;
+        string key;
+        unsigned index;
+        string text;
+        int number;
+        float decimal;
+        vector<shared_ptr<property_value>> array;
+        unordered_map<string, shared_ptr<property_value>> object;
+        // TODO: store additional semantic information here
+    };
 
-    void synchronize_globals() {
-        if (dirty) {
-            // TODO
-            globals.entry->value.dump();
-            dirty = false;
-        } else {
+    property::~property() = default;
 
+    scene::scene() = default;
+
+    scene::scene(string filename, bool create_missing) : 
+        create_missing(create_missing) 
+    {
+        data = make_shared<scene_data>();
+        value = make_shared<property_value>(property_value{{}, data});
+        try {
+            data->file = json::parse(std::ifstream(filename.c_str()));
+            // TODO: parse into property_value objects
+        } catch(const json::parse_error&) {
+            if (!create_missing)
+                throw;
+            // TODO: create file
         }
+        this->filename = std::move(filename);
     }
 
-    map map::operator[](const std::string_view& key) {
-        auto& map = entry->value;
-        // for reasons unknown to me, contains doesn't accept string_view in em
-        std::string key_string(key);
-        if (create_missing && !map.contains(key_string)) {
-            map[key_string];
-            dirty = true;
-        }
-        return { make_unique<configuration_entry>(map.at(key_string)) };
+    scene::~scene() = default;
+
+    property property::operator[](string_view key) {
+        auto &field = value->object[string(key)];
+        if (!field)
+            field = make_shared<property_value>(value, value->root);
+        return {field};
     }
 
-    map map::operator[](std::size_t index) {
-        auto& array = entry->value;
-        if (create_missing && array.size() >= index) {
-            array[index];
-            dirty = true;
-        }
-        return { make_unique<configuration_entry>(array.at(index)) };
+    property property::operator[](size_t key) {
+        if (value->array.size() <= key)
+            value->array.resize(key + 1);
+        auto &field = value->array[key];
+        if (!field)
+            field = make_shared<property_value>(value, value->root);
+        return {field};
     }
 
-    int deserialize<int>::operator()(map& value) {
-        return value.entry->value;
+    int deserialize<int>::operator()(property& value) {
+        // TODO: create value if it doesn't exist
+        return value.value->number;
     }
 
-    float deserialize<float>::operator()(map& value) {
-        return value.entry->value;
+    float deserialize<float>::operator()(property& value) {
+        return value.value->decimal;
     }
 
-    string_view deserialize<string_view>::operator()(map& value) {
-        return (string&)value.entry->value;
+    string_view deserialize<string_view>::operator()(property& value) {
+        return value.value->text;
     }
 }

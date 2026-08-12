@@ -18,6 +18,7 @@
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/draw.h>
 #include <immediate_mode_vulkan/edit.h>
+#include <immediate_mode_vulkan/globals.h>
 
 #include <freetype/freetype.h>
 #include <freetype/ftmodapi.h>
@@ -83,6 +84,11 @@ float break_strength = 1.5f;
 float camera_speed = 10;
 float camera_acceleration = 0;
 int lap_count = 4;
+
+enum {
+    COUNTDOWN, RACE, FINISHED,
+} phase = COUNTDOWN;
+float phase_time = 0.f;
 
 float line_side(vec2 a, vec2 b, vec2 point) {
     b -= a;
@@ -280,6 +286,8 @@ void write(
 task game_main() {
     unique_glfw glfw;
 
+    imv::scene scene("main_scene.json");
+
     int window_width = 1280, window_height = 720;
 
     // API depends on platform but must be set after call to glfwInit.
@@ -378,15 +386,16 @@ task game_main() {
 
     FT_Face face;
     assert(FT_New_Face(
-        library, "demo/daggersquare.regular.otf", 0, &face
+        library, "demo/Kwajong-4nL2W.ttf", 0, &face
     ) == 0);
     std::unordered_map<char, glyph> glyphs;
-    FT_Set_Pixel_Sizes(face, 16, 16);
+    FT_Set_Pixel_Sizes(face, 24, 24);
     {
         int height = 0, x = 0, y = 0;
         for (char c : {
             '+', '-', '.', '/',
             '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':',
+            'G', 'o', '!', 'F', 'i', 'n', 's', 'h'
         }) {
             FT_UInt glyph_index = FT_Get_Char_Index(face, c);
             FT_Load_Glyph(
@@ -464,8 +473,9 @@ task game_main() {
 
         int count;
         const float* axes = glfwGetJoystickAxes(GLFW_JOYSTICK_1, &count);
-        if (count >= 6) {
+        if (count > 0)
             input.steering += axes[0];
+        if (count > 5) {
             input.acceleration += axes[5] - axes[4];
         }
 
@@ -617,8 +627,9 @@ task game_main() {
             .vertex_count = 4,
         });
 
+        float scale = scene["font"]["scale"];
         uniforms.matrix = 
-            glm::scale(mat4{1}, vec3{1, (float)width / height, 1});
+            glm::scale(mat4{1}, vec3{1, (float)width / height, 1} * 0.5f);
         int integer_time = int(race_time * 100);
         text.clear();
         time_text.clear();
@@ -634,6 +645,7 @@ task game_main() {
             time_text += '0';
         time_text += std::to_string(hundredths);
         write(glyphs, text, time_text);
+        //write(glyphs, text, "Finish!");
 
         imv::draw({
             .stages = {
