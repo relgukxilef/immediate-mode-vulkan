@@ -1,9 +1,9 @@
-#include "vulkan/vulkan_core.h"
 #include <cstdint>
 #include <span>
 #include <type_traits>
 #include <vector>
 #include <concepts>
+#include <bit>
 
 #include <vulkan/vulkan.h>
 
@@ -14,6 +14,11 @@ namespace imv {
     template<std::integral T>
     void visit(std::vector<uint64_t>& buffer, auto value, tag_t<T>) {
         buffer.push_back(uint64_t(value));
+    }
+
+    template<std::floating_point T>
+    void visit(std::vector<uint64_t>& buffer, auto value, tag_t<T>) {
+        buffer.push_back(std::bit_cast<uint64_t>(double(value)));
     }
 
     template<class T>
@@ -94,5 +99,84 @@ namespace imv {
         visit_array(
             visitor, object.pPushConstantRanges, object.pushConstantRangeCount
         );
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, 
+        tag_t<VkVertexInputBindingDescription>
+    ) {
+        visit(visitor, object.binding);
+        visit(visitor, object.stride);
+        visit(visitor, object.inputRate);
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, 
+        tag_t<VkVertexInputAttributeDescription>
+    ) {
+        visit(visitor, object.location);
+        visit(visitor, object.binding);
+        visit(visitor, object.format);
+        visit(visitor, object.offset);
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, 
+        tag_t<VkPipelineVertexInputStateCreateInfo>
+    ) {
+        visit(visitor, object.sType);
+        visit(visitor, object.flags);
+        visit_array(
+            visitor, object.pVertexBindingDescriptions, 
+            object.vertexBindingDescriptionCount
+        );
+        visit_array(
+            visitor, object.pVertexAttributeDescriptions, 
+            object.vertexAttributeDescriptionCount
+        );
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, tag_t<VkViewport>
+    ) {
+        visit(visitor, object.x);
+        visit(visitor, object.y);
+        visit(visitor, object.width);
+        visit(visitor, object.height);
+        visit(visitor, object.minDepth);
+        visit(visitor, object.maxDepth);
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, tag_t<VkRect2D>
+    ) {
+        visit(visitor, object.offset.x);
+        visit(visitor, object.offset.y);
+        visit(visitor, object.extent.width);
+        visit(visitor, object.extent.height);
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, tag_t<VkPipelineViewportStateCreateInfo>
+    ) {
+        visit(visitor, object.sType);
+        visit(visitor, object.flags);
+        visit_array(visitor, object.pViewports, object.viewportCount);
+        visit_array(visitor, object.pScissors, object.scissorCount);
+    }
+
+    void visit(
+        auto&& visitor, auto&& object, tag_t<VkGraphicsPipelineCreateInfo>
+    ) {
+        visit(visitor, object.sType);
+        visit(visitor, object.flags);
+        visit_array(
+            visitor, object.pVertexInputState, 
+            bool(object.pVertexInputState)
+        );
+        visit_array(
+            visitor, object.pViewportState, bool(object.pViewportState)
+        );
+        // TODO
     }
 }

@@ -1,17 +1,25 @@
-#include <cstdint>
 #include <immediate_mode_vulkan/draw.h>
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h>
 #include <immediate_mode_vulkan/resources/ktx_resources.h>
 #include "serialize.h"
-#include "vulkan/vulkan_core.h"
+#include <vulkan/vulkan_core.h>
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 #include <unordered_map>
 #include <filesystem>
 
 #include <ktx.h>
+
+// Definition for platforms where it is not made available by ktx (EMSCRIPTEN)
+KTX_error_code ktxVulkanDeviceInfo_Construct(
+    ktxVulkanDeviceInfo*,
+    VkPhysicalDevice, VkDevice,
+    VkQueue, VkCommandPool,
+    const VkAllocationCallbacks*
+);
 
 using namespace std;
 
@@ -24,7 +32,6 @@ namespace imv {
     }
 
     struct image {
-        vector<unique_pipeline> pipelines;
         vector<unique_sampler> samplers;
 
         // TODO: allocate uniform data from a shared buffer
@@ -43,6 +50,7 @@ namespace imv {
         vector<shared_ptr<unique_device_memory>> image_memories;
         vector<shared_ptr<unique_image>> images;
         vector<shared_ptr<unique_image_view>> image_views;
+        vector<unique_allocation> image_allocations;
 
         vector<unique_descriptor_set> descriptor_sets;
         VkCommandBuffer command_buffer;
@@ -72,6 +80,7 @@ namespace imv {
     struct shader_module_file {
         unique_shader_module shader_module;
         filesystem::file_time_type last_update;
+        unsigned shader_number;
     };
 
     struct pipeline {
@@ -124,6 +133,7 @@ namespace imv {
         unordered_map<
             string, shader_module_file, string_hash, equal_to<>
         > shader_cache;
+        unsigned next_shader_number = 0;
 
         unique_ktx_device ktx_device;
         
@@ -134,7 +144,7 @@ namespace imv {
         unordered_map<
             vector<uint64_t>,
             pipeline, vector_hash, equal_to<>
-        > pipeline_layouts;
+        > pipelines;
 
         unordered_map<
             vector<uint64_t>,
@@ -428,6 +438,11 @@ namespace imv {
         return *renderer;
     }
 
+    VkExtent2D get_surface_size(renderer* renderer) {
+        renderer_data& r = *get(renderer).d;
+        return r.view.extent;
+    }
+
     void wait_frame(renderer* renderer) {
         renderer_data& r = *get(renderer).d;
         auto& view = r.view;
@@ -598,11 +613,12 @@ namespace imv {
         ));
 
         vkResetCommandBuffer(image.command_buffer, 0);
-        image.pipelines.clear();
+        // can't just assign, because of command_buffer
         image.samplers.clear();
         image.images.clear();
         image.image_memories.clear();
         image.image_views.clear();
+        image.image_allocations.clear();
         image.descriptor_sets.clear();
         image.uniform_buffer_size = 0;
         image.vertex_buffer_size = 0;
@@ -647,15 +663,13 @@ namespace imv {
 
         VkDeviceSize uniform_size = 128;
 
-        VkDescriptorSetLayout descriptor_set_layout;
-        VkPipelineLayout pipeline_layout;
-        
         vector<VkDescriptorSetLayoutBinding> descriptor_set_layout_binding {
             {
                 .binding = 0,
                 .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                 .descriptorCount = 1,
-                .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                .stageFlags = 
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             },
         };
 
@@ -668,41 +682,6 @@ namespace imv {
             });
         }
         
-        {
-            VkDescriptorSetLayoutCreateInfo descriptor_create_info = {
-                .sType = 
-                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                .bindingCount =
-                    uint32_t(descriptor_set_layout_binding.size()),
-                .pBindings = descriptor_set_layout_binding.data(),
-            };
-            VkPipelineLayoutCreateInfo pipeline_create_info = {
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                .setLayoutCount = 1,
-            };
-            vector<uint64_t> key;
-            visit(key, descriptor_create_info);
-            visit(key, pipeline_create_info);
-
-            auto insert = r.pipeline_layouts.insert({key, {}});
-            if (insert.second) {
-                check(vkCreateDescriptorSetLayout(
-                    r.device.get(), &descriptor_create_info, nullptr, 
-                    out_ptr(insert.first->second.descriptor_set_layout)
-                ));
-                descriptor_set_layout = 
-                    insert.first->second.descriptor_set_layout.get();
-                pipeline_create_info.pSetLayouts = &descriptor_set_layout;
-                check(vkCreatePipelineLayout(
-                    r.device.get(), &pipeline_create_info, nullptr, 
-                    out_ptr(insert.first->second.pipeline_layout)
-                ));
-            }
-            descriptor_set_layout = 
-                insert.first->second.descriptor_set_layout.get();
-            pipeline_layout = insert.first->second.pipeline_layout.get();
-        }
-
         if (!image.uniform_buffer) {
             VkBufferCreateInfo create_info {
                 .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -722,96 +701,8 @@ namespace imv {
             ));
         }
 
-        size_t first_image_view = image.image_views.size();
+        vector<uint64_t> pipeline_key;
 
-        for (const auto& image_file : info.images) {
-            auto file_name = image_file.file_name;
-            auto insert = r.image_cache.emplace(file_name, imv::image_file{});
-            auto last_write = filesystem::last_write_time(file_name);
-            auto entry = insert.first;
-            if (insert.second || last_write > entry->second.last_update) {
-                entry->second.last_update = last_write;
-                
-                unique_ktx_texture2 texture;
-                unique_image vulkan_image;
-                unique_device_memory memory;
-                unique_image_view view;
-                
-                ktxVulkanTexture vulkan_texture;
-
-                auto result = ktxTexture2_CreateFromNamedFile(
-                    entry->first.c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, 
-                    out_ptr(texture)
-                );
-                // TODO: check VkPhysicalDeviceProperties for supported formats
-                if (result == VK_SUCCESS) {
-                    check(ktxTexture2_TranscodeBasis(
-                        texture.get(), KTX_TTF_BC7_RGBA, 0
-                    ));
-                    check(ktxTexture2_VkUploadEx(
-                        texture.get(), r.ktx_device.get(), &vulkan_texture, 
-                        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT, 
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                    ));
-
-                    vulkan_image.reset(vulkan_texture.image);
-                    memory.reset(vulkan_texture.deviceMemory);
-
-                    VkImageViewCreateInfo create_info = {
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                        .image = vulkan_image.get(),
-                        .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                        .format = vulkan_texture.imageFormat,
-                        .subresourceRange = {
-                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                            .baseMipLevel = 0,
-                            .levelCount = 1,
-                            .baseArrayLayer = 0,
-                            .layerCount = 1,
-                        },
-                    };
-                    check(vkCreateImageView(
-                        r.device.get(), &create_info, nullptr, 
-                        out_ptr(view)
-                    ));
-                    
-                    entry->second.image = 
-                        make_shared<unique_image>(std::move(vulkan_image));
-                    entry->second.device_memory = 
-                        make_shared<unique_device_memory>(std::move(memory));
-                    entry->second.view = 
-                        make_shared<unique_image_view>(std::move(view));
-                }
-            }
-
-            image.images.push_back(entry->second.image);
-            image.image_memories.push_back(entry->second.device_memory);
-            image.image_views.push_back(entry->second.view);
-        }
-
-        image.samplers.push_back({});
-
-        {
-            VkSamplerCreateInfo create_info = {
-                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                .magFilter = VK_FILTER_LINEAR,
-                .minFilter = VK_FILTER_LINEAR,
-                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                .anisotropyEnable = VK_FALSE,
-                .minLod = 0.0,
-                .maxLod = VK_LOD_CLAMP_NONE,
-            };
-            check(vkCreateSampler(
-                r.device.get(), &create_info, nullptr, 
-                out_ptr(image.samplers.back())
-            ));
-        }
-
-        image.pipelines.push_back({});
-        
         r.pipeline_shader_stages.resize(info.stages.size());
 
         for (auto i = 0u; i < info.stages.size(); i++) {
@@ -821,7 +712,6 @@ namespace imv {
             auto last_write = filesystem::last_write_time(fileNameView);
             auto entry = insert.first;
             if (insert.second || last_write > entry->second.last_update) {
-                entry->second.last_update = last_write;
                 auto code = read_file(fileName);
                 VkShaderModuleCreateInfo create_info = {
                     .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -834,7 +724,11 @@ namespace imv {
                     out_ptr(shader_module)
                 );
                 if (result == VK_SUCCESS) {
-                    entry->second.shader_module = std::move(shader_module);
+                    entry->second = {
+                        .shader_module = std::move(shader_module),
+                        .last_update = last_write,
+                        .shader_number = r.next_shader_number++,
+                    };
                 }
             }
             VkPipelineShaderStageCreateInfo create_info = 
@@ -845,6 +739,7 @@ namespace imv {
             if (create_info.pName == nullptr)
                 create_info.pName = "main";
             r.pipeline_shader_stages[i] = create_info;
+            pipeline_key.push_back(entry->second.shader_number);
         }
 
         if (!image.vertex_buffer) {
@@ -889,6 +784,19 @@ namespace imv {
             }
         }
 
+        VkDescriptorSetLayoutCreateInfo descriptor_create_info = {
+            .sType = 
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount =
+            uint32_t(descriptor_set_layout_binding.size()),
+            .pBindings = descriptor_set_layout_binding.data(),
+        };
+        VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1,
+            // .pSetLayouts is part of the cache
+        };
+
         VkPipelineVertexInputStateCreateInfo pipeline_vertex_input_state = {
             .sType = 
                 VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -902,11 +810,11 @@ namespace imv {
                 data(vertex_input_attribute_description),
         };
         VkPipelineInputAssemblyStateCreateInfo pipeline_input_assembly_state = {
-            .sType =
-                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-            .primitiveRestartEnable = VK_FALSE,
-        };
+                .sType =
+                    VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                .topology = info.topology,
+                .primitiveRestartEnable = VK_FALSE,
+            };
         VkViewport viewport = {
             .x = 0.0f, .y = 0.0f,
             .width = float(view.extent.width), 
@@ -963,13 +871,39 @@ namespace imv {
             .pRasterizationState = &pipeline_rasterization_state,
             .pMultisampleState = &pipeline_multisample_state,
             .pColorBlendState = &pipeline_color_blend_state,
-            .layout = pipeline_layout,
+            // .layout is part of the cache
             .renderPass = r.render_pass.get(),
         };
-        check(vkCreateGraphicsPipelines(
-            r.device.get(), r.pipeline_cache.get(), 1, &create_info, nullptr,
-            out_ptr(image.pipelines.back())
-        ));
+
+        visit(pipeline_key, descriptor_create_info);
+        visit(pipeline_key, pipeline_layout_create_info);
+        visit(pipeline_key, create_info);
+
+        auto insert = r.pipelines.insert({pipeline_key, {}});
+        auto entry = insert.first;
+        if (insert.second) {
+            check(vkCreateDescriptorSetLayout(
+                r.device.get(), &descriptor_create_info, nullptr, 
+                out_ptr(entry->second.descriptor_set_layout)
+            ));
+            auto descriptor_set_layout = 
+                entry->second.descriptor_set_layout.get();
+            pipeline_layout_create_info.pSetLayouts = &descriptor_set_layout;
+            check(vkCreatePipelineLayout(
+                r.device.get(), &pipeline_layout_create_info, nullptr, 
+                out_ptr(entry->second.pipeline_layout)
+            ));
+            create_info.layout = entry->second.pipeline_layout.get();
+
+            check(vkCreateGraphicsPipelines(
+                r.device.get(), r.pipeline_cache.get(), 1, &create_info, nullptr,
+                out_ptr(entry->second.pipeline)
+            ));
+        }
+        
+        auto descriptor_set_layout = entry->second.descriptor_set_layout.get();
+        auto pipeline_layout = entry->second.pipeline_layout.get();
+        auto pipeline = entry->second.pipeline.get();
 
         {
             // TODO: may need a separate pool per pipeline layout
@@ -1024,51 +958,317 @@ namespace imv {
                 .range = uniform_size,
             }
         };
-        vector<VkWriteDescriptorSet> write_descriptor_set = {
-            {
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = image.descriptor_sets.back().get(),
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = uint32_t(size(descriptor_buffer_info)),
-                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .pBufferInfo = descriptor_buffer_info,
-            },
-        };
+        vector<VkWriteDescriptorSet> write_descriptor_set;
+        write_descriptor_set.push_back({
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = image.descriptor_sets.back().get(),
+            .dstBinding = uint32_t(write_descriptor_set.size()),
+            .dstArrayElement = 0,
+            .descriptorCount = uint32_t(size(descriptor_buffer_info)),
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = descriptor_buffer_info,
+        });
+
+        size_t first_image_view = image.image_views.size();
+
+        image.samplers.push_back({});
+
         vector<VkDescriptorImageInfo> descriptor_image_info;
-        for (int i = 0; i < info.images.size(); i++) {
+
+        {
+            VkSamplerCreateInfo create_info = {
+                .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                .magFilter = VK_FILTER_LINEAR,
+                .minFilter = VK_FILTER_LINEAR,
+                .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .anisotropyEnable = VK_FALSE,
+                .minLod = 0.0,
+                .maxLod = VK_LOD_CLAMP_NONE,
+            };
+            check(vkCreateSampler(
+                r.device.get(), &create_info, nullptr, 
+                out_ptr(image.samplers.back())
+            ));
+        }
+
+        for (const auto& image_file : info.images) {
+            if (!image_file.buffer_source_pointer)
+                continue;
+
+            // vma already caches allocations
+            VkBufferCreateInfo buffer_info = {
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .size = image_file.buffer_size,
+                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            };
+            VmaAllocationCreateInfo allocation_info = {
+                .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .usage = VMA_MEMORY_USAGE_AUTO,
+            };
+            VkBuffer texture_buffer;
+            unique_allocation buffer_allocation;
+            check(vmaCreateBuffer(
+                r.allocator.get(), &buffer_info, &allocation_info, 
+                &texture_buffer, out_ptr(buffer_allocation), nullptr
+            ));
+
+            check(vmaCopyMemoryToAllocation(
+                r.allocator.get(), image_file.buffer_source_pointer,
+                buffer_allocation.get(), 0, image_file.buffer_size
+            ));
+
+            allocation_info = {
+                .usage = VMA_MEMORY_USAGE_AUTO,
+            };
+            VkImage texture_image;
+            unique_allocation allocation;
+            check(vmaCreateImage(
+                r.allocator.get(), &image_file.image_info, &allocation_info, 
+                &texture_image, out_ptr(allocation), nullptr
+            ));
+
+            // TODO: have a cached, shared command buffer for transfers
+            VkCommandBufferAllocateInfo command_info = {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool = r.command_pool.get(),
+                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                .commandBufferCount = 1,
+            };
+            VkCommandBuffer copy_command_buffer;
+            check(vkAllocateCommandBuffers(
+                r.device.get(), &command_info, &copy_command_buffer
+            ));
+            VkCommandBufferBeginInfo begin_info = {
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            };
+            check(vkBeginCommandBuffer(copy_command_buffer, &begin_info));
+
+            VkImageMemoryBarrier barrier = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = texture_image,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+            vkCmdPipelineBarrier(
+                copy_command_buffer,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+
+            VkBufferImageCopy buffer_image_copy = {
+                .bufferOffset = 0,
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+                .imageOffset = {0, 0, 0},
+                .imageExtent = image_file.image_info.extent,
+            };
+            vkCmdCopyBufferToImage(
+                copy_command_buffer, texture_buffer,
+                texture_image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &buffer_image_copy
+            );
+
+            barrier = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = texture_image,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+            vkCmdPipelineBarrier(
+                copy_command_buffer,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier
+            );
+
+            check(vkEndCommandBuffer(copy_command_buffer));
+
+            VkSubmitInfo submit_info = {
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &copy_command_buffer,
+            };
+            check(vkQueueSubmit(
+                r.graphics_queue, 1, &submit_info, VK_NULL_HANDLE
+            ));
+            check(vkQueueWaitIdle(r.graphics_queue));
+            
+            vkFreeCommandBuffers(
+                r.device.get(), r.command_pool.get(), 1, &copy_command_buffer
+            );
+
+            VkImageViewCreateInfo view_info = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = texture_image,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D, // TODO: read from parameters
+                .format = image_file.image_info.format,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+            unique_image_view view;
+            check(vkCreateImageView(
+                r.device.get(), &view_info, nullptr, 
+                out_ptr(view)
+            ));
+            image.image_views.push_back(
+                make_shared<unique_image_view>(std::move(view))
+            );
+            image.image_allocations.push_back(std::move(allocation));
             descriptor_image_info.push_back({
                 .sampler = image.samplers.back().get(),
-                .imageView = image.image_views[first_image_view + i]->get(),
+                .imageView = image.image_views.back()->get(),
                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             });
         }
 
-        for (unsigned i = 0; i < info.images.size(); i++) {
+        for (const auto& image_file : info.images) {
+            auto file_name = image_file.file_name;
+            if (file_name.empty())
+                continue;
+            auto insert = r.image_cache.emplace(file_name, imv::image_file{});
+            auto last_write = filesystem::last_write_time(file_name);
+            auto entry = insert.first;
+            if (insert.second || last_write > entry->second.last_update) {
+                entry->second.last_update = last_write;
+                
+                unique_ktx_texture2 texture;
+                unique_image vulkan_image;
+                unique_device_memory memory;
+                unique_image_view view;
+                
+                ktxVulkanTexture vulkan_texture;
+
+                auto result = ktxTexture2_CreateFromNamedFile(
+                    entry->first.c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, 
+                    out_ptr(texture)
+                );
+                // TODO: check VkPhysicalDeviceProperties for supported formats
+                if (result == KTX_SUCCESS) {
+                    check(ktxTexture2_TranscodeBasis(
+                        texture.get(), KTX_TTF_BC7_RGBA, 0
+                    ));
+                    // TODO: maybe use VMA for the allocation
+                    check(ktxTexture2_VkUploadEx(
+                        texture.get(), r.ktx_device.get(), &vulkan_texture, 
+                        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_SAMPLED_BIT, 
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    ));
+
+                    // TODO: make the following code agnostic to whether the 
+                    // texture was read from a file or a buffer
+                    vulkan_image.reset(vulkan_texture.image);
+                    memory.reset(vulkan_texture.deviceMemory);
+
+                    VkImageViewCreateInfo create_info = {
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                        .image = vulkan_image.get(),
+                        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                        .format = vulkan_texture.imageFormat,
+                        .subresourceRange = {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                    };
+                    check(vkCreateImageView(
+                        r.device.get(), &create_info, nullptr, 
+                        out_ptr(view)
+                    ));
+                    
+                    entry->second.image = 
+                        make_shared<unique_image>(std::move(vulkan_image));
+                    entry->second.device_memory = 
+                        make_shared<unique_device_memory>(std::move(memory));
+                    entry->second.view = 
+                        make_shared<unique_image_view>(std::move(view));
+                }
+            }
+
+            image.images.push_back(entry->second.image);
+            image.image_memories.push_back(entry->second.device_memory);
+            image.image_views.push_back(entry->second.view);
+            descriptor_image_info.push_back({
+                .sampler = image.samplers.back().get(),
+                .imageView = image.image_views.back()->get(),
+                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            });
+        }
+
+        // write_descriptor_set holds pointers into descriptor_image_info
+        for (const auto& info : descriptor_image_info) {
             write_descriptor_set.push_back({
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .dstSet = image.descriptor_sets.back().get(),
-                .dstBinding = 1 + i,
+                .dstBinding = uint32_t(write_descriptor_set.size()),
                 .dstArrayElement = 0,
                 .descriptorCount = 1,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = &descriptor_image_info[i],
+                .pImageInfo = &info,
             });
         }
         vkUpdateDescriptorSets(
             r.device.get(), 
-            size(write_descriptor_set), data(write_descriptor_set), 0, nullptr
+            uint32_t(size(write_descriptor_set)), data(write_descriptor_set), 0, 
+            nullptr
         );
 
         vkCmdBindPipeline(
             image.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            image.pipelines.back().get()
+            pipeline
         );
 
-        vkCmdBindVertexBuffers(
-            image.command_buffer, 0, size(info.vertex_input_bindings), 
-            data(vertex_buffers), data(vertex_offsets)
-        );
+        if (!vertex_buffers.empty())
+            vkCmdBindVertexBuffers(
+                image.command_buffer, 0, uint32_t(size(vertex_buffers)),
+                data(vertex_buffers), data(vertex_offsets)
+            );
 
         auto descriptor_set = image.descriptor_sets.back().get();
         vkCmdBindDescriptorSets(
@@ -1080,14 +1280,19 @@ namespace imv {
         vkCmdDraw(image.command_buffer, info.vertex_count, 1, 0, 0);
 
         // TODO: store offset in uniform_buffer?
+        const void* pointer = info.uniform_source_pointer;
+        size_t size = info.uniform_source_size;
+        if (!pointer) {
+            pointer = info.uniform_source.pointer;
+            size = info.uniform_source.size;
+        }
         check(vmaCopyMemoryToAllocation(
-            r.allocator.get(), info.uniform_source_pointer, 
+            r.allocator.get(), pointer, 
             image.uniform_allocation.get(), 
-            image.uniform_buffer_size, info.uniform_source_size
+            image.uniform_buffer_size, size
         ));
 
-        image.uniform_buffer_size += 
-            aligned(info.uniform_source_size, r.offset_alignment);
+        image.uniform_buffer_size += aligned(size, r.offset_alignment);
 
         return true;
     }

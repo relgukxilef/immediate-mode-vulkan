@@ -7,6 +7,18 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+if (NOT EMSCRIPTEN)
+    set(DESKTOP 1)
+else()
+    set(DESKTOP 0)
+endif()
+
+if(NOT CMAKE_SIZEOF_VOID_P)
+    # Set a default value for CMAKE_SIZEOF_VOID_P
+    # It is not set when building with emscripten
+    set(CMAKE_SIZEOF_VOID_P 4)
+endif()
+
 if (CMAKE_BUILD_TYPE EQUAL "Debug")
     add_compile_options(/fsanitize=address)
     add_link_options(/fsanitize=address)
@@ -19,22 +31,18 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/glfw/glfw.git
     GIT_TAG 3.4
 )
-FetchContent_MakeAvailable(glfw)
 
-include(FetchContent)
 FetchContent_Declare(
     glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
     GIT_TAG 1.0.1
 )
-FetchContent_MakeAvailable(glm)
 
 FetchContent_Declare(
     VulkanHeaders
     GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
     GIT_TAG v1.4.307
 )
-FetchContent_MakeAvailable(VulkanHeaders)
 
 FetchContent_Declare(
     VulkanMemoryAllocator
@@ -42,17 +50,48 @@ FetchContent_Declare(
         https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
     GIT_TAG v3.3.0
 )
-FetchContent_MakeAvailable(VulkanMemoryAllocator)
+
+FetchContent_Declare(
+    emsdk
+    GIT_REPOSITORY https://github.com/emscripten-core/emsdk.git
+    GIT_TAG 5.0.5
+)
+
+FetchContent_Declare(
+    VulkanGL
+    GIT_REPOSITORY https://github.com/relgukxilef/VulkanGL.git
+    GIT_TAG main
+)
+
+FetchContent_Declare(
+    freetype
+    GIT_REPOSITORY https://github.com/freetype/freetype.git
+    GIT_TAG VER-2-14-3
+)
 
 set(KTX_FEATURE_TESTS OFF)
 set(KTX_FEATURE_TOOLS ON)
 set(KTX_FEATURE_VK_UPLOAD ON)
+# Unfortunately, KTX can't be tricked into emitting Vulkan calls when 
+# __EMSCRIPTEN__ is defined, and that can't be undefined
 FetchContent_Declare(
     KTX
     GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
     GIT_TAG v4.4.2
 )
-FetchContent_MakeAvailable(KTX)
+
+FetchContent_Declare(json
+    GIT_REPOSITORY https://github.com/nlohmann/json
+    GIT_TAG v3.12.0
+)
+
+FetchContent_MakeAvailable(
+    glm VulkanHeaders VulkanMemoryAllocator KTX json emsdk VulkanGL freetype
+)
+
+if (DESKTOP)
+    FetchContent_MakeAvailable(glfw)
+endif()
 
 find_package(Vulkan 1.1)
 
@@ -65,34 +104,21 @@ add_library(
     source/resources/vulkan_memory_allocator_resource.cpp
     include/immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h
     include/immediate_mode_vulkan/resources/ktx_resources.h
+    include/immediate_mode_vulkan/edit.h
+    source/edit.cpp
+    include/immediate_mode_vulkan/globals.h
+    source/globals.cpp
 )
 
 target_link_libraries(
     ImmediateModeVulkan
-    gdi32 user32 kernel32 Vulkan::Vulkan glfw Vulkan::Headers glm
-    VulkanMemoryAllocator ktx_read
+    $<${DESKTOP}:gdi32 user32 kernel32 Vulkan::Vulkan glfw>
+    Vulkan::Headers glm
+    VulkanMemoryAllocator ktx_read nlohmann_json::nlohmann_json
 )
 
 target_include_directories(
     ImmediateModeVulkan PUBLIC include
-)
-
-target_compile_features(ImmediateModeVulkan PRIVATE cxx_std_23)
-
-add_executable(
-    demo
-    demo/main.cpp
-)
-
-target_compile_features(demo PRIVATE cxx_std_23)
-
-target_link_libraries(
-    demo PRIVATE ImmediateModeVulkan
-)
-
-target_include_directories(
-    demo PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 function(add_shader TARGET SHADER)
@@ -112,14 +138,53 @@ function(add_shader TARGET SHADER)
         DEPENDS ${input_path}
         VERBATIM
     )
-    target_sources(
-        ${TARGET} PRIVATE ${output_path}.spv ${input_path}
-    )
+    target_sources(${TARGET} PRIVATE ${output_path}.spv ${input_path})
 endfunction(add_shader)
 
-add_shader(demo demo/vertex.glsl)
-add_shader(demo demo/fragment.glsl)
-add_shader(demo demo/flat_fragment.glsl)
+add_shader(ImmediateModeVulkan source/flat_vertex.glsl)
+add_shader(ImmediateModeVulkan source/flat_fragment.glsl)
+
+target_compile_features(ImmediateModeVulkan PRIVATE cxx_std_23)
+
+target_compile_definitions(ImmediateModeVulkan PRIVATE JSON_HAS_CPP_17)
+
+# TODO: Move demo to separate CMakeLists.txt
+add_executable(
+    demo-racing
+    demo/racing/main.cpp
+    $<IF:$<BOOL:${EMSCRIPTEN}>,demo/racing/main-emscripten.cpp,demo/racing/main-desktop.cpp>
+)
+
+target_link_libraries(
+    demo-racing PRIVATE 
+    ImmediateModeVulkan
+    freetype
+)
+
+target_include_directories(
+    demo-racing PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+if (EMSCRIPTEN)
+    #target_compile_options(ImmediateModeVulkan PRIVATE -fwasm-exceptions)
+    target_link_options(demo-racing PRIVATE -sUSE_GLFW=3 -sMIN_WEBGL_VERSION=2)
+    target_link_libraries(demo-racing PRIVATE VulkanGL::VulkanGL)
+    set_target_properties(demo-racing PROPERTIES SUFFIX ".html")
+    target_link_options(
+        demo-racing PUBLIC 
+        -gsource-map=inline 
+        --preload-file "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo@demo"
+    )
+    target_compile_options(demo-racing PUBLIC -gsource-map=inline)
+endif()
+
+target_compile_features(demo-racing PRIVATE cxx_std_23)
+
+add_shader(demo-racing demo/racing/vertex.glsl)
+add_shader(demo-racing demo/racing/fragment.glsl)
+add_shader(demo-racing demo/racing/flat_fragment.glsl)
+add_shader(demo-racing demo/racing/text_fragment.glsl)
 
 function(add_texture TARGET TEXTURE)
     add_custom_command(
@@ -140,5 +205,9 @@ function(add_texture TARGET TEXTURE)
     )
 endfunction()
 
-add_texture(demo demo/1.png)
-add_texture(demo demo/2.png)
+add_custom_command(
+    TARGET demo-racing PRE_LINK
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/demo/racing/Kwajong-4nL2W.ttf
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/racing/Kwajong-4nL2W.ttf
+)

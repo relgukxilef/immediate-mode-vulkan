@@ -1,0 +1,714 @@
+#include "main.h"
+
+#include <cassert>
+#include <memory>
+#include <unordered_map>
+#include <vector>
+#include <string>
+#include <string_view>
+
+#define GLFW_INCLUDE_VULKAN
+#define GLFW_VULKAN_STATIC
+#include <GLFW/glfw3.h>
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include <immediate_mode_vulkan/resources/vulkan_resources.h>
+#include <immediate_mode_vulkan/draw.h>
+#include <immediate_mode_vulkan/edit.h>
+#include <immediate_mode_vulkan/globals.h>
+
+#include <freetype/freetype.h>
+#include <freetype/ftmodapi.h>
+
+using std::unique_ptr;
+using std::out_ptr;
+using namespace glm;
+
+void glfw_check(int code) {
+    if (code == GLFW_TRUE) {
+        return;
+    } else {
+        throw std::runtime_error("Failed to initialize GLFW");
+    }
+}
+
+struct unique_glfw {
+    unique_glfw() { glfw_check(glfwInit()); }
+    ~unique_glfw() { glfwTerminate(); }
+};
+
+struct glfw_window_deleter {
+    typedef GLFWwindow* pointer;
+    void operator()(GLFWwindow *window) {
+        glfwDestroyWindow(window);
+    }
+};
+
+using unique_window = unique_ptr<GLFWwindow, glfw_window_deleter>;
+
+struct input {
+    float steering = 0, acceleration = 0;
+};
+
+const float time_delta = 0.5e-2f;
+
+vec2 clamp_length(vec2 x, float max) {
+    float length_squared = glm::dot(x, x);
+    if (length_squared < max * max)
+        return x;
+    return x * glm::inversesqrt(length_squared) * max;
+}
+
+vec2 project(vec2 x, vec2 target) {
+    return target * glm::dot(x, target);
+}
+
+float move_towards(float x, float target, float distance) {
+    return x + clamp(target - x, -distance, distance);
+}
+
+vec2 smooth_normalize(vec2 x) {
+    return x / (length(x) + 1e-3f);
+}
+
+float steering_speed = 0.5f;
+float turning_speed = 1.f / 40; // 40 meter turn radius
+float acceleration = 800.f;
+float starting_acceleration = 100.f;
+float starting_speed = 30.f;
+float break_speed = 30.f;
+float break_strength = 1.5f;
+float camera_speed = 10;
+float camera_acceleration = 0;
+int lap_count = 4;
+
+enum {
+    COUNTDOWN, RACE, FINISHED,
+} phase = COUNTDOWN;
+float phase_time = 0.f;
+
+float line_side(vec2 a, vec2 b, vec2 point) {
+    b -= a;
+    point -= a;
+    return dot(vec2{b.y, -b.x}, point);
+}
+
+float line_distance(vec2 a, vec2 b, vec2 point) {
+    b -= a;
+    point -= a;
+    return line_side({}, normalize(b), point);
+}
+
+int edge_crossing(vec2 a, vec2 b, vec2 s, vec2 e) {
+    b -= a;
+    s -= a;
+    e -= a;
+    if (dot(b, s) < 0)
+        return 0;
+    if (dot(b, e) < 0)
+        return 0;
+    if (dot(b, b - s) < 0)
+        return 0;
+    if (dot(b, b - e) < 0)
+        return 0;
+    vec2 normal = {b.y, -b.x};
+    return int(dot(normal, e) < 0) - int(dot(normal, s) < 0);
+}
+
+vec2 edge_collide(vec2 a, vec2 b, vec2 point, float depth) {
+    b -= a;
+    vec2 local = point - a;
+    vec2 tangent = normalize(b);
+    vec2 normal = {tangent.y, -tangent.x};
+    float t = dot(tangent, local);
+    if (t < 0)
+        return point;
+    if (t > dot(tangent, b))
+        return point;
+    float s = dot(normal, local);
+    if (s < 0)
+        return point;
+    if (s > depth)
+        return point;
+
+    return a + tangent * t;
+}
+
+struct track {
+    std::vector<vec2> strip;
+    vec2 end = {}, forward = {0, 1};
+    void append_straight(float length, float width) {
+        vec2 normal = {forward.y, -forward.x};
+        strip.push_back(end + width * normal);
+        strip.push_back(end - width * normal);
+        end += forward * length;
+    }
+    void append_turn(float radius, float width) {
+        int resolution = 8;
+        mat2 rotation = rotate(
+            mat4(1), pi<float>() / resolution * sign(radius) / 2, 
+            {0, 0, 1}
+        );
+        vec2 normal = {forward.y, -forward.x};
+        vec2 left = 
+            (radius + width) * normal, right = (radius - width) * normal;
+        vec2 center = end - normal * radius;
+        for (auto i = 0u; i < resolution; i++) {
+            strip.push_back(center + left);
+            strip.push_back(center + right);
+            left = rotation * left;
+            right = rotation * right;
+        }
+        end = center + forward * abs(radius);
+        forward = -normal * sign(radius);
+    }
+    vec2 collide(vec2 point) {
+        vec2 a = strip[0], b = strip[1];
+        for (int i = 2; i < strip.size(); i+=2) {
+            vec2 c = strip[i], d = strip[i + 1];
+
+            point = edge_collide(a, c, point, 4);
+            point = edge_collide(d, b, point, 4);
+
+            a = c;
+            b = d;
+        }
+        return point;
+    }
+};
+
+struct car {
+    vec2 position = {};
+    vec2 velocity = {};
+    float heading = 0.f;
+    float steering = 0.f;
+    
+    void update(input input, ::track& track) {
+        input.steering = glm::clamp(input.steering, -1.f, 1.f);
+        input.acceleration = glm::clamp(input.acceleration, -1.f, 1.f);
+
+        float speed = glm::length(velocity);
+
+        steering = move_towards(
+            steering, input.steering, speed * time_delta * steering_speed
+        );
+
+        vec2 forward = { sin(heading), cos(heading) };
+
+        velocity = project(velocity, forward);
+        
+        float forward_speed = glm::dot(velocity, forward);
+
+        float heading_change = 
+            forward_speed * time_delta * steering * turning_speed;
+        heading -= heading_change;
+
+        velocity = 
+            mat2(rotate(mat4(1.0), heading_change, {0, 0, 1})) * velocity;
+        
+        if (sign(input.acceleration) * -forward_speed > break_speed)
+            velocity -= forward_speed * break_strength * time_delta * forward;
+        else if (abs(forward_speed) < starting_speed)
+            velocity += 
+                starting_acceleration * time_delta * 
+                input.acceleration * forward;
+        else
+            velocity += 
+                acceleration * (1 - 0.5f * abs(steering)) * time_delta / 
+                (1.f + speed) * input.acceleration * forward;
+
+        position += velocity * time_delta;
+
+        vec2 sum_push = {};
+        vec2 sum_rotation = {};
+        vec2 corners[] = {
+            {-1, -2}, {1, -2}, {1, 2}, {-1, 2}, 
+        };
+        for (auto corner : corners) {
+            corner = 
+                corner.x * vec2{forward.y, -forward.x} + corner.y * forward;
+            corner += position;
+            vec2 destination = track.collide(corner);
+            sum_push += destination - corner;
+            corner -= position;
+            destination -= position;
+            vec2 relative = {
+                dot({corner.y, -corner.x}, destination),
+                dot(corner, destination), 
+            };
+            sum_rotation += relative;
+        }
+
+        position += sum_push / 4.f;
+        heading_change = -atan2(sum_rotation.x, sum_rotation.y);
+        heading -= heading_change;
+        // Rotate velocity on shallow collisions to account for polygon limit 
+        // in track
+        float max_angle = pi<float>() / 16;
+        velocity = 
+            mat2(rotate(mat4(1.0), heading_change, {0, 0, 1})) * velocity;
+        heading_change = 
+            asin(dot(smooth_normalize(velocity), smooth_normalize(sum_push)));
+        velocity *= cos(max(abs(heading_change) - max_angle, 0.f));
+    }
+};
+
+struct glyph {
+    float advance;
+    vec2 size, source_offset, destination_offset;
+};
+
+void write(
+    const std::unordered_map<char, glyph>& glyphs, 
+    std::vector<vec2> &buffer,
+    std::string_view text
+) {
+    vec2 position = {};
+    for (char c : text) {
+        auto glyph = glyphs.at(c);
+        vec2 source = glyph.source_offset;
+        vec2 destination = position + glyph.destination_offset;
+        vec2 size = glyph.size;
+        for (
+            vec2 vertex : {vec2(0, 0), {1, 0}, {0, 1}, {1, 0}, {0, 1}, {1, 1},}
+        ) {
+            buffer.insert(buffer.end(), {
+                destination + vertex * size, source + vertex * size,
+            });
+        }
+        position.x += glyph.advance;
+    }
+}
+
+task game_main() {
+    unique_glfw glfw;
+
+    imv::scene scene("main_scene.json");
+
+    int window_width = 1280, window_height = 720;
+
+    // API depends on platform but must be set after call to glfwInit.
+    glfwWindowHint(GLFW_CLIENT_API, glfw_api);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
+    unique_window window{glfwCreateWindow(
+        window_width, window_height, "Vulkan Experiments", nullptr, nullptr
+    )};
+
+    VkApplicationInfo application_info{
+        .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+        .pApplicationName = "Vulkan Experiments",
+        .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
+        .pEngineName = "Immediate Mode Vulkan",
+        .engineVersion = VK_MAKE_VERSION(1, 0, 0),
+        .apiVersion = VK_API_VERSION_1_0
+    };
+
+    // look up extensions needed by GLFW
+    uint32_t glfw_extension_count = 0;
+    auto glfw_extensions =
+        glfwGetRequiredInstanceExtensions(&glfw_extension_count);
+
+    // loop up supported extensions
+    uint32_t supported_extension_count = 0;
+    vkEnumerateInstanceExtensionProperties(
+        nullptr, &supported_extension_count, nullptr
+    );
+    auto supported_extensions =
+        std::make_unique<VkExtensionProperties[]>(supported_extension_count);
+    vkEnumerateInstanceExtensionProperties(
+        nullptr, &supported_extension_count, supported_extensions.get()
+    );
+
+    // create instance
+    auto extension_count = glfw_extension_count;
+    auto extensions = std::make_unique<const char*[]>(extension_count);
+    std::copy(
+        glfw_extensions, glfw_extensions + glfw_extension_count,
+        extensions.get()
+    );
+    imv::unique_instance instance;
+    {
+        VkInstanceCreateInfo createInfo{
+            .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+            .pNext = nullptr,
+            .pApplicationInfo = &application_info,
+            .enabledExtensionCount = static_cast<uint32_t>(extension_count),
+            .ppEnabledExtensionNames = extensions.get(),
+        };
+        imv::check(vkCreateInstance(
+            &createInfo, nullptr, out_ptr(instance)
+        ));
+    }
+    imv::current_instance = instance.get();
+
+    // create surface
+    imv::unique_surface surface;
+    imv::check(glfwCreateWindowSurface(
+        instance.get(), window.get(), nullptr, out_ptr(surface)
+    ));
+
+    imv::renderer renderer(instance.get(), surface.get());
+    imv::global_renderer = &renderer;
+    imv::editor editor;
+    imv::global_editor = &editor;
+
+    track track;
+
+    track.append_straight(80, 20);
+    track.append_turn(40, 20);
+    track.append_straight(40, 20);
+    track.append_turn(-40, 20);
+    track.append_straight(40, 20);
+    track.append_straight(10, 20);
+    track.append_turn(-40, 20);
+    track.append_straight(10, 20);
+    track.append_straight(150, 20);
+    track.append_turn(-80, 20);
+    track.append_straight(170, 20);
+    track.append_turn(-80, 20);
+    track.append_turn(-80, 20);
+    track.append_straight(0, 20);
+
+    car car;
+    vec2 camera_position = {}, camera_velocity = {};
+    float last_update = float(glfwGetTime());
+    float steering_limit = 1;
+    
+    unsigned char font_map[256 * 256] = {};
+    FT_Library library;
+    FT_Init_FreeType(&library);
+    FT_Int spread = 2;
+    FT_Property_Set(library, "sdf", "spread", &spread);
+
+    FT_Face face;
+    assert(FT_New_Face(
+        library, "demo/Kwajong-4nL2W.ttf", 0, &face
+    ) == 0);
+    std::unordered_map<char, glyph> glyphs;
+    FT_Set_Pixel_Sizes(face, 24, 24);
+    {
+        int height = 0, x = 0, y = 0;
+        for (char c : {
+            '+', '-', '.', '/',
+            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':',
+            'G', 'o', '!', 'F', 'i', 'n', 's', 'h'
+        }) {
+            FT_UInt glyph_index = FT_Get_Char_Index(face, c);
+            FT_Load_Glyph(
+                face, glyph_index, FT_LOAD_NO_BITMAP | FT_LOAD_NO_HINTING
+            );
+            FT_Render_Glyph(face->glyph, FT_RENDER_MODE_SDF);
+
+            auto& bitmap = face->glyph->bitmap;
+            if (x + bitmap.width >= 256) {
+                x = 0;
+                y = height;
+            }
+            height = max<int>(height, y + bitmap.rows);
+            for (unsigned row = 0; row < bitmap.rows; row++) {
+                std::copy(
+                    bitmap.buffer + row * abs(bitmap.pitch), 
+                    bitmap.buffer + row * abs(bitmap.pitch) + bitmap.width, 
+                    font_map + (row + y) * 256 + x
+                );
+            }
+            glyphs[c] = {
+                .advance = 
+                    face->glyph->linearHoriAdvance / float(1 << 16) / 256.f,
+                .size = vec2{bitmap.width, bitmap.rows} / 256.f,
+                .source_offset = vec2{x, y,} / 256.f,
+                .destination_offset = 
+                    vec2{face->glyph->bitmap_left, -face->glyph->bitmap_top,} / 
+                    256.f,
+            };
+            x += bitmap.width;
+        }
+    }
+
+    std::vector<vec2> text;
+
+    FT_Done_FreeType(library);
+    std::string time_text;
+    float race_time = 0;
+    int laps = -1;
+
+    while (!glfwWindowShouldClose(window.get())) {
+        co_await animation_frame(window.get());
+        imv::wait_frame();
+        double x, y;
+        glfwGetCursorPos(window.get(), &x, &y);
+        imv::set_inputs({
+            .mouse = {
+                .x = float(x),
+                .y = float(y),
+                .primary = 
+                    glfwGetMouseButton(window.get(), GLFW_MOUSE_BUTTON_LEFT) == 
+                    GLFW_PRESS,
+            }
+        });
+
+        input input;
+        
+        if (glfwGetKey(window.get(), GLFW_KEY_A))
+            steering_limit = 0.25;
+        if (glfwGetKey(window.get(), GLFW_KEY_S))
+            steering_limit = 0.5;
+        if (glfwGetKey(window.get(), GLFW_KEY_D))
+            steering_limit = 0.75;
+        if (glfwGetKey(window.get(), GLFW_KEY_F))
+            steering_limit = 1;
+
+        if (glfwGetKey(window.get(), GLFW_KEY_UP))
+            input.acceleration++;
+        if (glfwGetKey(window.get(), GLFW_KEY_DOWN))
+            input.acceleration--;
+        if (glfwGetKey(window.get(), GLFW_KEY_RIGHT))
+            input.steering += steering_limit;
+        if (glfwGetKey(window.get(), GLFW_KEY_LEFT))
+            input.steering -= steering_limit;
+
+        int count;
+        const float* axes = glfwGetJoystickAxes(GLFW_JOYSTICK_1, &count);
+        if (count > 0)
+            input.steering += axes[0];
+        if (count > 5) {
+            input.acceleration += axes[5] - axes[4];
+        }
+
+        int update_limit = 10;
+        while (last_update < glfwGetTime() && update_limit-- > 0) {
+            last_update += time_delta;
+            race_time += time_delta;
+            vec2 old_position = car.position;
+            car.update(input, track);
+
+            int crossing = 
+                edge_crossing({-20, 1}, {20, 1}, old_position, car.position);
+            laps += crossing;
+            if (crossing != 0)
+                printf("%i\n", laps);
+            if (laps == lap_count) {
+                race_time = 0;
+                laps = -1;
+                car = {};
+            }
+
+            vec2 forward = { sin(car.heading), cos(car.heading) };
+
+            camera_position += camera_velocity * time_delta;
+            auto motion = car.position - forward * 10.f - camera_position;
+            camera_position += time_delta * camera_speed * motion;
+            camera_velocity += 
+                time_delta * camera_acceleration * 
+                (car.velocity - camera_velocity);
+        }
+
+        int width, height;
+        glfwGetWindowSize(window.get(), &width, &height);
+
+        mat4 view_matrix = 
+            glm::infinitePerspective(1.5f, (float)width / height, 0.1f) *
+            glm::lookAt(
+                vec3{camera_position, 10}, vec3(car.position, 0), 
+                vec3{0, 0, -1}
+            );
+
+        struct uniforms_t {
+            mat4 matrix;
+            vec4 colors;
+            vec4 velocity;
+        };
+        
+        vec2 positions[] = { // and texture coordinates
+            vec2(-1, -1), vec2(0, 0),
+            vec2(1, -1), vec2(1, 0),
+            vec2(-1, 1), vec2(0, 1),
+            vec2(1, 1), vec2(1, 1),
+        };
+
+        auto stages = {
+            imv::stage_info{ 
+                .code_file_name = "demo/vertex.glsl.spv",
+                .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
+            }, { 
+                .code_file_name = "demo/fragment.glsl.spv",
+                .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
+            }, 
+        };
+
+        auto bindings = {
+            imv::vertex_binding_info{
+                .buffer_source_pointer = &positions,
+                .buffer_source_size = sizeof(positions),
+                .description = {
+                    .stride = 2 * sizeof(vec2),
+                    .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+                }, 
+                .attributes = {
+                    { 0, 0, VK_FORMAT_R32G32_SFLOAT, },
+                    { 1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(vec2) },
+                },
+            },
+        };
+
+        mat4 model_matrix = glm::scale(mat4(1.f), vec3(1, 1, 1));
+
+        uniforms_t uniforms{
+            .matrix = view_matrix * model_matrix,
+            .colors = vec4(1),
+            .velocity = vec4(abs(car.velocity) / 60.f, 0, 0),
+        };
+
+        imv::draw({
+            .stages = stages,
+            .vertex_input_bindings = {
+                {
+                    .buffer_source_pointer = track.strip.data(),
+                    .buffer_source_size = sizeof(vec2) * track.strip.size(),
+                    .description = {
+                        .stride = sizeof(vec2),
+                        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+                    }, 
+                    .attributes = {
+                        { 0, 0, VK_FORMAT_R32G32_SFLOAT, },
+                        { 1, 0, VK_FORMAT_R32G32_SFLOAT, },
+                    },
+                },
+            },
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = (uint32_t)track.strip.size(),
+        });
+
+        model_matrix = glm::scale(
+            glm::rotate(
+                glm::translate(mat4(1.0), vec3(car.position, 0)), 
+                -car.heading, vec3{0, 0, 1}
+            ), 
+            vec3(1, 2, 1)
+        );
+        
+        uniforms = {
+            .matrix = view_matrix * model_matrix,
+            .colors = vec4(0.1, 0.2, 1.0, 1.0),
+        };
+
+        imv::draw({
+            .stages = stages,
+            .vertex_input_bindings = bindings,
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = 4,
+        });
+
+        uniforms = {
+            .matrix = mat4(1),
+            .colors = vec4(0.8, 0.05, 0.05, 1.0),
+        };
+        uniforms.matrix = scale(uniforms.matrix, {(float)height / width, 1, 1});
+        uniforms.matrix = translate(uniforms.matrix, {0.9, 0.8, 0.0});
+        uniforms.matrix = rotate(
+            uniforms.matrix,
+            pi<float>() * (0.25f + length(car.velocity) * 0.005f),
+            {0, 0, 1}
+        );
+        uniforms.matrix = scale(uniforms.matrix, {0.01, 0.1, 1});
+        uniforms.matrix = translate(uniforms.matrix, {0.0, 1, 0.0});
+
+        imv::draw({
+            .stages = stages,
+            .vertex_input_bindings = bindings,
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = 4,
+        });
+
+        float scale = scene["font"]["scale"];
+        uniforms.matrix = 
+            glm::scale(mat4{1}, vec3{1, (float)width / height, 1} * 0.5f);
+        int integer_time = int(race_time * 100);
+        text.clear();
+        time_text.clear();
+        time_text += std::to_string(integer_time / 100 / 60);
+        time_text += ':';
+        int seconds = integer_time / 100 % 60;
+        if (seconds < 10)
+            time_text += '0';
+        time_text += std::to_string(seconds);
+        time_text += '.';
+        int hundredths = integer_time % 100;
+        if (hundredths < 10)
+            time_text += '0';
+        time_text += std::to_string(hundredths);
+        write(glyphs, text, time_text);
+        //write(glyphs, text, "Finish!");
+
+        imv::draw({
+            .stages = {
+                imv::stage_info{ 
+                    .code_file_name = "demo/vertex.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, }
+                }, { 
+                    .code_file_name = "demo/text_fragment.glsl.spv",
+                    .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, }
+                }, 
+            },
+            .vertex_input_bindings = {
+                {
+                    .buffer_source_pointer = text.data(),
+                    .buffer_source_size = text.size() * sizeof(vec2),
+                    .description = {
+                        .stride = 2 * sizeof(vec2),
+                        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+                    }, 
+                    .attributes = {
+                        { 0, 0, VK_FORMAT_R32G32_SFLOAT, },
+                        { 1, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(vec2) },
+                    },
+                },
+            },
+            .images = {{
+                .buffer_source_pointer = font_map,
+                .buffer_size = std::size(font_map),
+                .image_info = {
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                    .imageType = VK_IMAGE_TYPE_2D,
+                    .format = VK_FORMAT_R8_UNORM,
+                    .extent = { 256, 256, 1, },
+                    .mipLevels = 1,
+                    .arrayLayers = 1,
+                    .samples = VK_SAMPLE_COUNT_1_BIT,
+                    .tiling = VK_IMAGE_TILING_LINEAR,
+                    .usage = 
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | 
+                        VK_IMAGE_USAGE_SAMPLED_BIT,
+                    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                },
+                .sampler_info = {
+                    .magFilter = VK_FILTER_LINEAR,
+                    .minFilter = VK_FILTER_LINEAR,
+                    .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                    .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                    .anisotropyEnable = VK_FALSE,
+                    .minLod = 0.0,
+                    .maxLod = VK_LOD_CLAMP_NONE,
+                },
+            },},
+            .uniform_source_pointer = &uniforms,
+            .uniform_source_size = sizeof(uniforms),
+            .vertex_count = uint32_t(text.size() / 2),
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        });
+
+        imv::submit();
+        
+        glfwPollEvents();
+    }
+}
