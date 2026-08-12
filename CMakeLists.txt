@@ -121,43 +121,6 @@ target_include_directories(
     ImmediateModeVulkan PUBLIC include
 )
 
-target_compile_features(ImmediateModeVulkan PRIVATE cxx_std_23)
-
-target_compile_definitions(ImmediateModeVulkan PRIVATE JSON_HAS_CPP_17)
-
-# TODO: Move demo to separate CMakeLists.txt
-add_executable(
-    demo
-    demo/main.cpp
-    $<IF:$<BOOL:${EMSCRIPTEN}>,demo/main-emscripten.cpp,demo/main-desktop.cpp>
-)
-
-target_compile_features(demo PRIVATE cxx_std_23)
-
-target_link_libraries(
-    demo PRIVATE 
-    ImmediateModeVulkan
-    freetype
-)
-
-target_include_directories(
-    demo PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-if (EMSCRIPTEN)
-    #target_compile_options(ImmediateModeVulkan PRIVATE -fwasm-exceptions)
-    target_link_options(demo PRIVATE -sUSE_GLFW=3 -sMIN_WEBGL_VERSION=2)
-    target_link_libraries(demo PRIVATE VulkanGL::VulkanGL)
-    set_target_properties(demo PROPERTIES SUFFIX ".html")
-    target_link_options(
-        demo PUBLIC 
-        -gsource-map=inline 
-        --preload-file "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo@demo"
-    )
-    target_compile_options(demo PUBLIC -gsource-map=inline)
-endif()
-
 function(add_shader TARGET SHADER)
     find_program(GLSLC glslc)
 
@@ -181,21 +144,47 @@ endfunction(add_shader)
 add_shader(ImmediateModeVulkan source/flat_vertex.glsl)
 add_shader(ImmediateModeVulkan source/flat_fragment.glsl)
 
-target_compile_features(demo PRIVATE cxx_std_23)
+target_compile_features(ImmediateModeVulkan PRIVATE cxx_std_23)
+
+target_compile_definitions(ImmediateModeVulkan PRIVATE JSON_HAS_CPP_17)
+
+# TODO: Move demo to separate CMakeLists.txt
+add_executable(
+    demo-racing
+    demo/racing/main.cpp
+    $<IF:$<BOOL:${EMSCRIPTEN}>,demo/racing/main-emscripten.cpp,demo/racing/main-desktop.cpp>
+)
 
 target_link_libraries(
-    demo PRIVATE ImmediateModeVulkan
+    demo-racing PRIVATE 
+    ImmediateModeVulkan
+    freetype
 )
 
 target_include_directories(
-    demo PRIVATE 
+    demo-racing PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-add_shader(demo demo/vertex.glsl)
-add_shader(demo demo/fragment.glsl)
-add_shader(demo demo/flat_fragment.glsl)
-add_shader(demo demo/text_fragment.glsl)
+if (EMSCRIPTEN)
+    #target_compile_options(ImmediateModeVulkan PRIVATE -fwasm-exceptions)
+    target_link_options(demo-racing PRIVATE -sUSE_GLFW=3 -sMIN_WEBGL_VERSION=2)
+    target_link_libraries(demo-racing PRIVATE VulkanGL::VulkanGL)
+    set_target_properties(demo-racing PROPERTIES SUFFIX ".html")
+    target_link_options(
+        demo-racing PUBLIC 
+        -gsource-map=inline 
+        --preload-file "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo@demo"
+    )
+    target_compile_options(demo-racing PUBLIC -gsource-map=inline)
+endif()
+
+target_compile_features(demo-racing PRIVATE cxx_std_23)
+
+add_shader(demo-racing demo/racing/vertex.glsl)
+add_shader(demo-racing demo/racing/fragment.glsl)
+add_shader(demo-racing demo/racing/flat_fragment.glsl)
+add_shader(demo-racing demo/racing/text_fragment.glsl)
 
 function(add_texture TARGET TEXTURE)
     add_custom_command(
@@ -216,12 +205,9 @@ function(add_texture TARGET TEXTURE)
     )
 endfunction()
 
-add_texture(demo demo/1.png)
-add_texture(demo demo/2.png)
-
 add_custom_command(
-    TARGET demo PRE_LINK
+    TARGET demo-racing PRE_LINK
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_CURRENT_SOURCE_DIR}/demo/Kwajong-4nL2W.ttf
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/Kwajong-4nL2W.ttf
+        ${CMAKE_CURRENT_SOURCE_DIR}/demo/racing/Kwajong-4nL2W.ttf
+        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/racing/Kwajong-4nL2W.ttf
 )
