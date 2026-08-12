@@ -211,3 +211,5 @@ add_custom_command(
         ${CMAKE_CURRENT_SOURCE_DIR}/demo/racing/Kwajong-4nL2W.ttf
         ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/demo/racing/Kwajong-4nL2W.ttf
 )
+
+add_subdirectory(demo/npr)

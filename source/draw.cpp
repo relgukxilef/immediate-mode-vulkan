@@ -1286,13 +1286,15 @@ namespace imv {
             pointer = info.uniform_source.pointer;
             size = info.uniform_source.size;
         }
-        check(vmaCopyMemoryToAllocation(
-            r.allocator.get(), pointer, 
-            image.uniform_allocation.get(), 
-            image.uniform_buffer_size, size
-        ));
-
-        image.uniform_buffer_size += aligned(size, r.offset_alignment);
+        if (pointer) {
+            check(vmaCopyMemoryToAllocation(
+                r.allocator.get(), pointer, 
+                image.uniform_allocation.get(), 
+                image.uniform_buffer_size, size
+            ));
+            
+            image.uniform_buffer_size += aligned(size, r.offset_alignment);
+        }
 
         return true;
     }

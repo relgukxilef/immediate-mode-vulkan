@@ -59,6 +59,10 @@ namespace imv {
         std::initializer_list<stage_info> stages;
         std::initializer_list<vertex_binding_info> vertex_input_bindings;
         std::initializer_list<image_info> images;
+        // TODO: indexed rendering not implemented
+        const void* index_buffer_source_pointer;
+        size_t index_buffer_source_size;
+        VkIndexType index_type;
         const void* uniform_source_pointer;
         VkDeviceSize uniform_source_size;
         buffer_data uniform_source;
