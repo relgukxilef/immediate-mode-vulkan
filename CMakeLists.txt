@@ -213,3 +213,4 @@ add_custom_command(
 )
 
 add_subdirectory(demo/npr)
+add_subdirectory(demo/planets)
