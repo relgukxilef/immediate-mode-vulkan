@@ -106,7 +106,7 @@ int main() {
     imv::global_renderer = &renderer;
 
 
-    float vertices[] = {
+    const float vertices[] = {
         0, 0, 0, 0,
         1, 0, 0, 0,
         0, 1, 0, 0,
@@ -117,7 +117,7 @@ int main() {
         1, 1, 1, 0,
     };
 
-    unsigned faces[] = {
+    const unsigned faces[] = {
         0, 1, 2, 3, // bottom
         7,    // half front
         1, 5, // right
@@ -126,6 +126,24 @@ int main() {
         7,    // half front
         4, 5, // top
     };
+
+    // TODO: Add edge tangents to face-vertices
+    // maybe processing faces in triangle strips is efficient
+    // Visibility of a face has to be decided consistently on each vertex 
+    // individually. Maybe store a vec4 with face normal and dot product with 
+    // face provoking vertex at each face-vertex.
+    // TODO: How to calculate edge tangents and face normals under amateur 
+    // transformation?
+    // TODO: It's not enough to store two edges per face-vertex. All edges 
+    // adjacent to a vertex could be outlines, and the displacement depends on 
+    // both.
+    // Maybe determine outline edges and then iteratively inset shape in 
+    // surface space. Maybe calculate a signed distance field in a surface 
+    // texture or along the mesh. 
+    // TODO: How to clip face insets? Maybe by face bounds? 
+    // TODO: Create faces for edges
+    // TODO: Create faces for vertices
+
     vector<float> face_vertices;
 
     for (unsigned face : faces) {
@@ -135,7 +153,36 @@ int main() {
             begin(vertices) + (face + 1) * 4
         );
     }
-    
+
+    vector<unsigned> vertex_edge_neighbors_size(size(vertices) / 4);
+    vector<unsigned> vertex_edge_neighbors_begin(size(vertices) / 4);
+    vector<unsigned> vertex_edge_neighbors_vertices(size(faces));
+
+    for (unsigned face : faces) {
+        vertex_edge_neighbors_size[face]++;
+    }
+
+    {
+        unsigned begin = 0;
+        for (auto i = 0; i < size(vertices) / 4; i++) {
+            vertex_edge_neighbors_begin[i] = begin;
+            begin += vertex_edge_neighbors_size[i];
+        }
+    }
+
+    fill(
+        vertex_edge_neighbors_size.begin(), vertex_edge_neighbors_size.end(), 0
+    );
+
+    for (auto i = 0; i < size(faces); i++) {
+        unsigned face = faces[i];
+        unsigned begin = vertex_edge_neighbors_begin[face];
+        unsigned &index = vertex_edge_neighbors_size[face];
+        vertex_edge_neighbors_vertices[begin + index] = i;
+        index++;
+    }
+
+    vector<float> vertex_edge_distance(size(vertices) / 4);
 
     while (!glfwWindowShouldClose(window.get())) {
         imv::wait_frame();
@@ -157,6 +204,85 @@ int main() {
             rotate(mat4(1), time, {0, 0, 1}) *
             translate(mat4(1), vec3(-0.5));
 
+        // initialize
+        for (auto i = 0; i < size(vertices) / 4; i++) {
+            float distance = 1e6;
+            auto vertex = std::begin(vertices) + i * 4;
+            vec4 center = 
+                view_matrix * vec4{*vertex++, *vertex++, *vertex++, 1,};
+            unsigned begin = vertex_edge_neighbors_begin[i];
+            bool front = false, back = false;
+            for (auto j = 0; j < vertex_edge_neighbors_size[i]; j++) {
+                auto strip = vertex_edge_neighbors_vertices[begin + j];
+                int offsets[] = {-2, -1, 1, 2};
+                vec4 next = {};
+                for (int k = 0; k < 4; k++) {
+                    int face = strip + offsets[k];
+                    if (face < 0 || face >= size(faces))
+                        continue;
+                    auto vertex = std::begin(vertices) + faces[face] * 4;
+                    vec4 position = next;
+                    next = 
+                        view_matrix * vec4{*vertex++, *vertex++, *vertex++, 1};
+                    next = next / next.w - center / center.w;
+
+                    if (position == vec4{})
+                        continue;
+
+                    vec3 normal = cross(vec3(position), vec3(next));
+                    if (strip % 2)
+                        // TODO: how does this interact with restart indices?
+                        normal = -normal;
+                    if (normal.z < 0)
+                        front = true;
+                    else
+                        back = true;
+                }
+            }
+            if (front && back)
+                distance = 0;
+            vertex_edge_distance[i] = distance;
+        }
+
+        // propagate
+        // TODO: loop
+        for (auto i = 0; i < size(vertices) / 4; i++) {
+            float distance = vertex_edge_distance[i];
+            auto vertex = std::begin(vertices) + i * 4;
+            vec4 center = 
+                view_matrix * vec4{*vertex++, *vertex++, *vertex++, 1,};
+            unsigned begin = vertex_edge_neighbors_begin[i];
+            for (auto j = 0; j < vertex_edge_neighbors_size[i]; j++) {
+                auto strip = vertex_edge_neighbors_vertices[begin + j];
+                int offsets[] = {-2, -1, 1, 2};
+                for (int k = 0; k < 4; k++) {
+                    int face = strip + offsets[k];
+                    if (face < 0 || face >= size(faces))
+                        continue;
+                    auto vertex = std::begin(vertices) + faces[face] * 4;
+                    vec4 position = 
+                        view_matrix * vec4{*vertex++, *vertex++, *vertex++, 1};
+                    position = position / position.w - center / center.w;
+
+                    float length = glm::length(vec2(position));
+                    distance = std::min(
+                        distance,
+                        vertex_edge_distance[faces[face]] + length
+                    );
+                    // TODO: account for paths across the face
+                }
+            }
+            vertex_edge_distance[i] = distance;
+        }
+
+        // TODO: pass distances to vertex shader and apply threshold
+        for (int i = 0; i < size(faces); i++) {
+            face_vertices[i * 4 + 3] = vertex_edge_distance[faces[i]];
+        }
+
+        // TODO: depth buffer
+        // TODO: indexed draw, only then it's possible to restart strips
+        unsigned stride = sizeof(float) * 4;
         imv::draw({
             .stages = {
                 {
@@ -174,14 +300,24 @@ int main() {
                         .buffer_source_size = 
                             sizeof(float) * face_vertices.size(),
                         .description = {
-                            .stride = sizeof(float) * 4,
+                            .stride = stride,
                             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
                         }, 
                         .attributes = {
                             { 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, },
+                            { 1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, },
+                            { 2, stride, VK_FORMAT_R32G32B32A32_SFLOAT, },
+                            { 3, 2 * stride, VK_FORMAT_R32G32B32A32_SFLOAT, },
                         },
                     }
                 }
+            },
+            .pipeline_rasterization_state = {
+                .sType = 
+                    VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                .polygonMode = VK_POLYGON_MODE_FILL,
+                .cullMode = VK_CULL_MODE_BACK_BIT,
+                .lineWidth = 1.0f, 
             },
             .uniform_source = uniforms_t{
                 .matrix = view_matrix,
@@ -191,7 +327,7 @@ int main() {
         });
 
         imv::submit();
-        
+
         glfwPollEvents();
     }
 }

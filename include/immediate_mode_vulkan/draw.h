@@ -60,6 +60,12 @@ namespace imv {
         std::initializer_list<vertex_binding_info> vertex_input_bindings;
         std::initializer_list<image_info> images;
         // TODO: indexed rendering not implemented
+        VkPipelineRasterizationStateCreateInfo pipeline_rasterization_state = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            // required, even when not doing line rendering
+            .lineWidth = 1.0f, 
+        };
         const void* index_buffer_source_pointer;
         size_t index_buffer_source_size;
         VkIndexType index_type;

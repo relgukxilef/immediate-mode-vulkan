@@ -832,14 +832,6 @@ namespace imv {
             .scissorCount = 1,
             .pScissors = &scissor,
         };
-        VkPipelineRasterizationStateCreateInfo 
-        pipeline_rasterization_state = {
-            .sType = 
-                VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-            .polygonMode = VK_POLYGON_MODE_FILL,
-            // required, even when not doing line rendering
-            .lineWidth = 1.0f, 
-        };
         VkPipelineMultisampleStateCreateInfo pipeline_multisample_state = {
             .sType = 
                 VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
@@ -868,7 +860,7 @@ namespace imv {
             .pVertexInputState = &pipeline_vertex_input_state,
             .pInputAssemblyState = &pipeline_input_assembly_state,
             .pViewportState = &pipeline_viewport_state,
-            .pRasterizationState = &pipeline_rasterization_state,
+            .pRasterizationState = &info.pipeline_rasterization_state,
             .pMultisampleState = &pipeline_multisample_state,
             .pColorBlendState = &pipeline_color_blend_state,
             // .layout is part of the cache
