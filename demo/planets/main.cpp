@@ -1,17 +1,17 @@
-#include "glm/ext/matrix_clip_space.hpp"
-#include "glm/ext/matrix_transform.hpp"
-#include "glm/gtc/constants.hpp"
-#include "vulkan/vulkan_core.h"
-#include <cmath>
+#include <vulkan/vulkan_core.h>
 #include <immediate_mode_vulkan/resources/vulkan_resources.h>
 #include <immediate_mode_vulkan/draw.h>
 
 #include <GLFW/glfw3.h>
 
+#define GLM_FORCE_XYZW_ONLY
 #include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <memory>
 #include <vector>
+#include <cmath>
 
 using namespace std;
 using namespace glm;
@@ -37,11 +37,6 @@ struct glfw_window_deleter {
 };
 
 using unique_window = unique_ptr<GLFWwindow, glfw_window_deleter>;
-
-struct tile {
-    vec3 center;
-    vec3 corners[4];
-};
 
 vec3 mix(vec3 a, vec3 b, float x) {
     return a * (1 - x) + b * x;
@@ -73,6 +68,27 @@ vec3 get_arc_vertex2(
     float b_factor = sin(parameter * angle) / divisor;
     float a_factor = sin((1 - parameter) * angle) / divisor;
     return center * (1 - a_factor - b_factor) + a * a_factor + b * b_factor;
+    //return a * a_factor + b * (1 - a_factor);
+}
+
+vec3 get_arc_vertex3(
+    vec3 center, vec3 a, vec3 b, float angle, float parameter
+) {
+    // Law of sines
+    // Can't avoid two divisions as only x / x is guaranteed to be 1.
+    float divisor = sin(angle);
+    float b_factor = sin(parameter * angle) / divisor;
+    float a_factor = sin((1 - parameter) * angle) / divisor;
+    return center * (
+        one_minus_cos(parameter * angle) - 
+        sin(parameter * angle) * tan(angle / 2)
+    ) + a * a_factor + b * b_factor;
+}
+
+auto geodesic_cube_side_length(auto coordinates) {
+    // Law of sines for spherical triangles
+    return 
+        2.f * atan(sin(coordinates * half_pi<float>() + quarter_pi<float>()));
 }
 
 // Calculate vertex position from center and corners, relative to first corner.
@@ -82,21 +98,21 @@ vec3 get_arc_vertex2(
 vec3 get_geodesic_cube_vertex(
     vec3 center, vec3 corners[3], vec2 coordinates, float size, vec2 parameter
 ) {
-    vec3 angles = 2.f * atan(sin(vec3(
+    vec3 angles = geodesic_cube_side_length(vec3(
         coordinates.y, coordinates.y + size, coordinates.x + parameter.x * size
-    ) * half_pi<float>() + quarter_pi<float>()));
+    )) * size;
 
-    vec3 a = get_arc_vertex2(center, {}, corners[0], angles.x, parameter.x);
+    vec3 a = get_arc_vertex3(center, {}, corners[0], angles.x, parameter.x);
     vec3 b = 
-        get_arc_vertex2(center, corners[1], corners[2], angles.y, parameter.x);
+        get_arc_vertex3(center, corners[1], corners[2], angles.y, parameter.x);
 
-    return get_arc_vertex2(center, a, b, angles.z, parameter.y);
+    return get_arc_vertex3(center, a, b, angles.z, parameter.y);
 }
 
-vec3 get_geodesic_cube_vertex(vec3 center, ivec2 index, float size) {
+vec3 get_geodesic_cube_vertex(ivec2 index, float size) {
     vec3 corners[3] = {{-1, 0, 0}, {0, -1, 0}, {-1, -1, 0}};
     return get_geodesic_cube_vertex(
-        vec3{-.5f}, corners, {}, 1, 
+        vec3{-.5f, -.5f, -.5f}, corners, vec2{}, 1.,
         vec2(index) * size
     );
 }
@@ -108,21 +124,51 @@ void push(vector<float>::iterator& value, vec3 point) {
 }
 
 void get_tile(
-    vec3 center, vec3 cube, int level, int resolution, vector<float>& positions
+    float radius, ivec2 index, int level, int resolution,
+    vector<float>& positions, vec3& offset
 ) {
+    float size = 1.f / (1 << level);
+    vec2 coordinates = size * vec2(index);
+    vec3 corners[4];
+    vec2 offsets[] = {{0, 0}, {0, 1}, {1, 0}, {1, 1}};
+    for (int i = 0; i < 4; i++) {
+        corners[i] = radius * normalize(vec3(
+            tan(half_pi<float>() * (coordinates + size * offsets[i] - .5f)),
+            1.f
+        ));
+    }
+    offset = -corners[0];
+    for (int i = 0; i < 4; i++) {
+        corners[i] += offset;
+    }
+
     int side = 1 << resolution;
     float step = 1.f / side;
+
     positions.resize((side + 2) * side * 2 * 3);
     auto value = positions.begin();
+
+    vec2 angles = geodesic_cube_side_length(vec2(
+        coordinates.y, coordinates.y + size
+    ));
+    
+    vec3 begin =
+        get_arc_vertex2(offset, {}, corners[1], angles.x, 0);
+    vec3 end =
+        get_arc_vertex2(offset, corners[2], corners[3], angles.y, 0);
+
     for (int i = 0; i < side; i++) {
-        push(value, get_geodesic_cube_vertex({}, {i, 0}, step));
-        push(value, get_geodesic_cube_vertex({}, {i, 0}, step));
-        push(value, get_geodesic_cube_vertex({}, {i + 1, 0}, step));
-        for (int j = 0; j < side; j++) {
-            push(value, get_geodesic_cube_vertex({}, {i, j + 1}, step));
-            push(value, get_geodesic_cube_vertex({}, {i + 1, j + 1}, step));
+        vec3 begin =
+            get_arc_vertex2(offset, {}, corners[1], angles.x, (i + 1) * step);
+        vec3 end =
+            get_arc_vertex2(offset, corners[2], corners[3], angles.y, (i + 1) * step);
+
+        push(value, get_geodesic_cube_vertex(offset, corners + 1, coordinates, size, vec2{i + 1, 0} * step));
+        for (int j = 0; j <= side; j++) {
+            push(value, get_geodesic_cube_vertex(offset, corners + 1, coordinates, size, vec2{i + 1, j} * step));
+            push(value, get_geodesic_cube_vertex(offset, corners + 1, coordinates, size, vec2{i, j} * step));
         }
-        push(value, get_geodesic_cube_vertex({}, {i + 1, side}, step));
+        push(value, get_geodesic_cube_vertex(offset, corners + 1, coordinates, size, vec2{i, side} * step));
     }
     assert(value == positions.end());
 }
@@ -197,7 +243,8 @@ int main() {
     imv::global_renderer = &renderer;
 
     vector<float> positions;
-    get_tile({}, {}, 0, 6, positions);
+    vec3 offset;
+    get_tile(6.371009e6, ivec2{1<<20}, 21, 6, positions, offset);
 
     while (!glfwWindowShouldClose(window.get())) {
         imv::wait_frame();
