@@ -12,16 +12,15 @@
 #include <memory>
 #include <vector>
 #include <cmath>
+#include <unordered_map>
 
 using namespace std;
 using namespace glm;
 
 void glfw_check(int code) {
-    if (code == GLFW_TRUE) {
-        return;
-    } else {
+    if (code != GLFW_TRUE)
         throw std::runtime_error("Failed to initialize GLFW");
-    }
+    return;
 }
 
 struct unique_glfw {
@@ -242,9 +241,15 @@ int main() {
     imv::renderer renderer(instance.get(), surface.get());
     imv::global_renderer = &renderer;
 
+    vec3 position{0};
+    float radius = 6.371009e6;
+    vec3 planet = {0, 0, -radius - 1};
+
     vector<float> positions;
     vec3 offset;
-    get_tile(6.371009e6, ivec2{1<<20}, 21, 6, positions, offset);
+    ivec3 current_tile;
+
+    //unordered_map<ivec3, shared_ptr<vector<float>>> tile_cache;
 
     while (!glfwWindowShouldClose(window.get())) {
         imv::wait_frame();
@@ -256,14 +261,32 @@ int main() {
             mat4 matrix;
         };
 
-        float time = glfwGetTime();
+        float time = float(glfwGetTime());
+        float x = glm::max(0.f, abs(2 * fract(time / 60.f) - 1) - 0.1f);
+        float distance = 1 + 1e6f * pow(x, 2.f);
+        distance = 1e3;
+        position = {
+            sin(time * .01) * 1e6, cos(time * .01) * 1e6, distance
+        };
+
+        vec3 relative = position - planet;
+        int level = int(-log2(length(relative) - radius) + 22.f);
+        level = clamp(level, 1, 22);
+        ivec2 tile = (
+            0.5f + atan(vec2{relative} / relative.z) / half_pi<float>()
+        ) * float(1 << level);
+
+        if (ivec3{tile, level} != current_tile) {
+            get_tile(
+                radius, tile, level, 6, positions, offset
+            );
+        }
+
+        relative += offset;
+        
         mat4 view_matrix = 
-            infinitePerspective(0.5f, (float)width / height, 0.1f) *
-            lookAt(
-                vec3{3}, vec3(-.5), 
-                vec3{0, 0, -1}
-            ) *
-            rotate(mat4(1), time, {0, 0, 1});
+            infinitePerspective(half_pi<float>(), (float)width / height, 0.1f) *
+            lookAt(relative, relative + vec3(1, 1, -2), vec3{0, 0, -1});
 
         imv::draw({
             .stages = {
@@ -279,15 +302,12 @@ int main() {
                 {
                     imv::vertex_binding_info{
                         .buffer_source_pointer = positions.data(),
-                        .buffer_source_size = 
-                            sizeof(float) * positions.size(),
+                        .buffer_source_size = sizeof(float) * positions.size(),
                         .description = {
                             .stride = 3 * sizeof(float),
                             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
                         }, 
-                        .attributes = {
-                            { 0, 0, VK_FORMAT_R32G32B32_SFLOAT, },
-                        },
+                        .attributes = {{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, },},
                     }
                 }
             },
