@@ -172,6 +172,63 @@ void get_tile(
     assert(value == positions.end());
 }
 
+struct uniforms_t {
+    mat4 matrix;
+};
+
+void draw_tile(
+    ivec3 tile, float radius, vector<float>& positions, vec3 relative,
+    mat4 projection_matrix
+) {
+    glm::vec3 offset;
+    get_tile(
+        radius, ivec2(tile), tile.z, 5, positions, offset
+    );
+
+    vec3 tile_position = relative + offset;
+    
+    mat4 view_matrix = 
+        projection_matrix *
+        lookAt(tile_position, tile_position + vec3(1, 1, -2), vec3{0, 0, -1});
+
+    imv::draw({
+        .stages = {
+            {
+                .code_file_name = "planet_vertex.glsl.spv",
+                .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, },
+            }, {
+                .code_file_name = "planet_fragment.glsl.spv",
+                .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, },
+            },
+        },
+        .vertex_input_bindings = {
+            {
+                imv::vertex_binding_info{
+                    .buffer_source_pointer = positions.data(),
+                    .buffer_source_size = sizeof(float) * positions.size(),
+                    .description = {
+                        .stride = 3 * sizeof(float),
+                        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+                    }, 
+                    .attributes = {{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, },},
+                }
+            }
+        },
+        .pipeline_rasterization_state = {
+            .sType = 
+                VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            .cullMode = VK_CULL_MODE_BACK_BIT,
+            .lineWidth = 1.0f, 
+        },
+        .uniform_source = uniforms_t{
+            .matrix = view_matrix,
+        },
+        .vertex_count = (unsigned)positions.size() / 3,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+    });
+}
+
 int main() {
     unique_glfw glfw;
 
@@ -257,10 +314,6 @@ int main() {
         int width, height;
         glfwGetWindowSize(window.get(), &width, &height);
 
-        struct uniforms_t {
-            mat4 matrix;
-        };
-
         float time = float(glfwGetTime());
         float x = glm::max(0.f, abs(2 * fract(time / 60.f) - 1) - 0.1f);
         float distance = 1 + 1e6f * pow(x, 2.f);
@@ -270,60 +323,24 @@ int main() {
         };
 
         vec3 relative = position - planet;
-        int level = int(-log2(length(relative) - radius) + 22.f);
+        int level = int(-log2(length(relative) - radius) + 23.f);
         level = clamp(level, 1, 22);
         ivec2 tile = (
             0.5f + atan(vec2{relative} / relative.z) / half_pi<float>()
         ) * float(1 << level);
 
-        if (ivec3{tile, level} != current_tile) {
-            get_tile(
-                radius, tile, level, 6, positions, offset
-            );
+        mat4 matrix =
+            infinitePerspective(half_pi<float>(), (float)width / height, 0.1f);
+
+        draw_tile({tile, level}, radius, positions, relative, matrix);
+
+        for (int l = level; l > 0; l--) {
+            draw_tile({tile ^ ivec2(0, 1), l}, radius, positions, relative, matrix);
+            draw_tile({tile ^ ivec2(1, 0), l}, radius, positions, relative, matrix);
+            draw_tile({tile ^ ivec2(1, 1), l}, radius, positions, relative, matrix);
+
+            tile >>= 1;
         }
-
-        relative += offset;
-        
-        mat4 view_matrix = 
-            infinitePerspective(half_pi<float>(), (float)width / height, 0.1f) *
-            lookAt(relative, relative + vec3(1, 1, -2), vec3{0, 0, -1});
-
-        imv::draw({
-            .stages = {
-                {
-                    .code_file_name = "planet_vertex.glsl.spv",
-                    .info = { .stage = VK_SHADER_STAGE_VERTEX_BIT, },
-                }, {
-                    .code_file_name = "planet_fragment.glsl.spv",
-                    .info = { .stage = VK_SHADER_STAGE_FRAGMENT_BIT, },
-                },
-            },
-            .vertex_input_bindings = {
-                {
-                    imv::vertex_binding_info{
-                        .buffer_source_pointer = positions.data(),
-                        .buffer_source_size = sizeof(float) * positions.size(),
-                        .description = {
-                            .stride = 3 * sizeof(float),
-                            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-                        }, 
-                        .attributes = {{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, },},
-                    }
-                }
-            },
-            .pipeline_rasterization_state = {
-                .sType = 
-                    VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                .polygonMode = VK_POLYGON_MODE_FILL,
-                .cullMode = VK_CULL_MODE_BACK_BIT,
-                .lineWidth = 1.0f, 
-            },
-            .uniform_source = uniforms_t{
-                .matrix = view_matrix,
-            },
-            .vertex_count = (unsigned)positions.size() / 3,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-        });
 
         imv::submit();
 
