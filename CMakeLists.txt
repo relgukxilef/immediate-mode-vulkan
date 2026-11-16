@@ -77,7 +77,7 @@ target_include_directories(
     ImmediateModeVulkan PUBLIC include
 )
 
-target_compile_features(ImmediateModeVulkan PRIVATE cxx_std_23)
+target_compile_features(ImmediateModeVulkan PUBLIC cxx_std_23)
 
 add_executable(
     demo
