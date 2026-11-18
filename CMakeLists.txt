@@ -7,6 +7,18 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+if (NOT EMSCRIPTEN)
+    set(DESKTOP 1)
+else()
+    set(DESKTOP 0)
+endif()
+
+if(NOT CMAKE_SIZEOF_VOID_P)
+    # Set a default value for CMAKE_SIZEOF_VOID_P
+    # It is not set when building with emscripten
+    set(CMAKE_SIZEOF_VOID_P 4)
+endif()
+
 if (CMAKE_BUILD_TYPE EQUAL "Debug")
     add_compile_options(/fsanitize=address)
     add_link_options(/fsanitize=address)
@@ -19,22 +31,18 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/glfw/glfw.git
     GIT_TAG 3.4
 )
-FetchContent_MakeAvailable(glfw)
 
-include(FetchContent)
 FetchContent_Declare(
     glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
     GIT_TAG 1.0.1
 )
-FetchContent_MakeAvailable(glm)
 
 FetchContent_Declare(
     VulkanHeaders
     GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
     GIT_TAG v1.4.307
 )
-FetchContent_MakeAvailable(VulkanHeaders)
 
 FetchContent_Declare(
     VulkanMemoryAllocator
@@ -42,17 +50,48 @@ FetchContent_Declare(
         https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
     GIT_TAG v3.3.0
 )
-FetchContent_MakeAvailable(VulkanMemoryAllocator)
+
+FetchContent_Declare(
+    emsdk
+    GIT_REPOSITORY https://github.com/emscripten-core/emsdk.git
+    GIT_TAG 5.0.5
+)
+
+FetchContent_Declare(
+    VulkanGL
+    GIT_REPOSITORY https://github.com/relgukxilef/VulkanGL.git
+    GIT_TAG main
+)
+
+FetchContent_Declare(
+    freetype
+    GIT_REPOSITORY https://github.com/freetype/freetype.git
+    GIT_TAG VER-2-14-3
+)
 
 set(KTX_FEATURE_TESTS OFF)
 set(KTX_FEATURE_TOOLS ON)
 set(KTX_FEATURE_VK_UPLOAD ON)
+# Unfortunately, KTX can't be tricked into emitting Vulkan calls when 
+# __EMSCRIPTEN__ is defined, and that can't be undefined
 FetchContent_Declare(
     KTX
     GIT_REPOSITORY https://github.com/KhronosGroup/KTX-Software.git
     GIT_TAG v4.4.2
 )
-FetchContent_MakeAvailable(KTX)
+
+FetchContent_Declare(json
+    GIT_REPOSITORY https://github.com/nlohmann/json
+    GIT_TAG v3.12.0
+)
+
+FetchContent_MakeAvailable(
+    glm VulkanHeaders VulkanMemoryAllocator KTX json emsdk VulkanGL freetype
+)
+
+if (DESKTOP)
+    FetchContent_MakeAvailable(glfw)
+endif()
 
 find_package(Vulkan 1.1)
 
@@ -65,12 +104,17 @@ add_library(
     source/resources/vulkan_memory_allocator_resource.cpp
     include/immediate_mode_vulkan/resources/vulkan_memory_allocator_resource.h
     include/immediate_mode_vulkan/resources/ktx_resources.h
+    include/immediate_mode_vulkan/edit.h
+    source/edit.cpp
+    include/immediate_mode_vulkan/globals.h
+    source/globals.cpp
 )
 
 target_link_libraries(
     ImmediateModeVulkan
-    gdi32 user32 kernel32 Vulkan::Vulkan glfw Vulkan::Headers glm
-    VulkanMemoryAllocator ktx_read
+    $<${DESKTOP}:gdi32 user32 kernel32 Vulkan::Vulkan glfw>
+    Vulkan::Headers glm
+    VulkanMemoryAllocator ktx_read nlohmann_json::nlohmann_json
 )
 
 target_include_directories(
@@ -78,6 +122,9 @@ target_include_directories(
 )
 
 target_compile_features(ImmediateModeVulkan PUBLIC cxx_std_23)
+
+target_compile_definitions(ImmediateModeVulkan PRIVATE JSON_HAS_CPP_17)
+
 
 add_executable(
     demo

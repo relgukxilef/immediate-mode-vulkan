@@ -1,3 +1,4 @@
+#include "vulkan/vulkan_core.h"
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <initializer_list>
@@ -16,6 +17,8 @@ namespace imv {
 
     extern struct renderer* global_renderer;
 
+    VkExtent2D get_surface_size(renderer* renderer = nullptr);
+
     void wait_frame(renderer* renderer = nullptr);
 
     struct stage_info {
@@ -24,15 +27,30 @@ namespace imv {
         VkPipelineShaderStageCreateInfo info;
     };
 
+    struct buffer_data {
+        buffer_data() = default;
+        buffer_data(const void* pointer, size_t size) : 
+            pointer(pointer), size(size) {}
+        template<class T>
+        buffer_data(const T& t) : buffer_data(&t, sizeof(t)) {}
+
+        const void* pointer;
+        size_t size;
+    };
+
     struct vertex_binding_info {
         const void* buffer_source_pointer;
         size_t buffer_source_size;
+        std::shared_ptr<VkBuffer>* buffer_pointer;
         VkVertexInputBindingDescription description;
         std::initializer_list<VkVertexInputAttributeDescription> attributes;
     };
 
     struct image_info {
         std::string_view file_name;
+        const void* buffer_source_pointer = nullptr;
+        size_t buffer_size = 0;
+        VkImageCreateInfo image_info;
         VkSamplerCreateInfo sampler_info;
     };
 
@@ -42,9 +60,20 @@ namespace imv {
         std::initializer_list<stage_info> stages;
         std::initializer_list<vertex_binding_info> vertex_input_bindings;
         std::initializer_list<image_info> images;
+        VkPipelineRasterizationStateCreateInfo pipeline_rasterization_state = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            // required, even when not doing line rendering
+            .lineWidth = 1.0f, 
+        };
+        const void* index_buffer_source_pointer;
+        size_t index_buffer_source_size;
+        VkIndexType index_type;
         const void* uniform_source_pointer;
         VkDeviceSize uniform_source_size;
+        buffer_data uniform_source;
         uint32_t vertex_count = 0;
+        VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     };
 
     bool draw(const draw_info&);
