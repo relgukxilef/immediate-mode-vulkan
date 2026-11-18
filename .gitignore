@@ -11,3 +11,4 @@
 !.gitignore
 
 build*
+_deps
