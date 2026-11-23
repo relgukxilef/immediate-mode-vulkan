@@ -89,6 +89,8 @@ FetchContent_MakeAvailable(
     glm VulkanHeaders VulkanMemoryAllocator KTX json emsdk VulkanGL freetype
 )
 
+FetchContent_GetProperties(KTX SOURCE_DIR KTX_source)
+
 if (DESKTOP)
     FetchContent_MakeAvailable(glfw)
 endif()
@@ -110,6 +112,16 @@ add_library(
     source/globals.cpp
 )
 
+# KTX puts its binaries to a config-dependent folder
+add_custom_command(
+    TARGET ImmediateModeVulkan POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/ktx_read.dll
+    ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+    COMMENT copy
+    VERBATIM
+)
+
 target_link_libraries(
     ImmediateModeVulkan
     $<${DESKTOP}:gdi32 user32 kernel32 Vulkan::Vulkan glfw>
@@ -127,7 +139,7 @@ target_compile_definitions(ImmediateModeVulkan PRIVATE JSON_HAS_CPP_17)
 
 
 add_executable(
-    demo
+    demo EXCLUDE_FROM_ALL
     demo/main.cpp
 )
 
